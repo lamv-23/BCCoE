@@ -4,3 +4,4 @@ langchain==0.0.320
 docarray==0.32.0
 pydantic==1.10.13
 openai==0.27.8
+backoff==2.2.1
