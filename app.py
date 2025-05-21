@@ -14,6 +14,11 @@ from langchain.prompts import PromptTemplate
 st.set_page_config(page_title="BCCoE Chatbot")
 st.title("BCCoE Training Assistant")
 
+# Button to clear chat history
+if st.button("🗑️ Clear chat"):
+    st.session_state.messages = []
+    st.experimental_rerun()
+
 # initialise chat history
 if "messages" not in st.session_state:
     st.session_state.messages = []
