@@ -14,10 +14,10 @@ from langchain.prompts import PromptTemplate
 st.set_page_config(page_title="BCCoE Chatbot")
 st.title("BCCoE Training Assistant")
 
-# Welcome banner
+# Welcome banner with darker background and white text
 st.markdown(
     """
-    <div style="background-color:#f0f2f6; padding:15px; border-radius:8px; margin-bottom:20px">
+    <div style="background-color:#333333; color:white; padding:15px; border-radius:8px; margin-bottom:20px">
       <h4 style="margin:0">👋 Welcome to the BCCoE Training Assistant</h4>
       <p style="margin:5px 0 0">
         Ask me anything about our business case materials and I'll do my best to help.
