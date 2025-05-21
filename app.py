@@ -14,10 +14,18 @@ from langchain.prompts import PromptTemplate
 st.set_page_config(page_title="BCCoE Chatbot")
 st.title("BCCoE Training Assistant")
 
-# Button to clear chat history
-if st.button("🗑️ Clear chat"):
-    st.session_state.messages = []
-    st.experimental_rerun()
+# Welcome banner
+st.markdown(
+    """
+    <div style="background-color:#f0f2f6; padding:15px; border-radius:8px; margin-bottom:20px">
+      <h4 style="margin:0">👋 Welcome to the BCCoE Training Assistant</h4>
+      <p style="margin:5px 0 0">
+        Ask me anything about our business case materials and I'll do my best to help.
+      </p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 # initialise chat history
 if "messages" not in st.session_state:
@@ -52,19 +60,17 @@ if "vectorstore" not in st.session_state:
     )
     chunks = splitter.split_text(text)
 
-    # embed and store in‐memory
+    # embed and store in-memory
     embeddings = OpenAIEmbeddings(openai_api_key=api_key)
     st.session_state.vectorstore = DocArrayInMemorySearch.from_texts(
         chunks, embedding=embeddings
     )
 
 # ——————————————————————————————
-# 🧠 Define custom prompt for personality & follow‐up
+# 🧠 Define custom prompt for personality & follow-up
 # ——————————————————————————————
 CUSTOM_SYSTEM_PROMPT = '''You are a friendly, conversational assistant who speaks like a colleague over coffee.
 Answer questions based only on the available information. If something isn’t clear or cannot be answered, simply say "I’m not sure, please contact a member of the team."'''
-
-
 
 prompt = PromptTemplate(
     input_variables=["context", "question"],
@@ -78,24 +84,30 @@ Question:
 )
 
 # ——————————————————————————————
-# 💬 Render chat history
+# 💬 Render chat history with styled bubbles
 # ——————————————————————————————
 for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.write(msg["content"])
+    role = msg["role"]
+    content = msg["content"]
+    if role == "user":
+        with st.chat_message("user"):
+            st.markdown(f"**🧑 You:** {content}")
+    else:
+        with st.chat_message("assistant"):
+            st.markdown(f"**🤖 Assistant:** {content}")
 
 # ——————————————————————————————
 # ✍️ New user input
 # ——————————————————————————————
-user_input = st.chat_input("Ask a question about the project documents:")
+user_input = st.chat_input("Type your question here…")
 if user_input:
     # record & display user message
     st.session_state.messages.append({"role": "user", "content": user_input})
     with st.chat_message("user"):
-        st.write(user_input)
+        st.markdown(f"**🧑 You:** {user_input}")
 
     # generate assistant response
-    with st.spinner("Thinking..."):
+    with st.spinner("Thinking…"):
         docs = st.session_state.vectorstore.similarity_search(user_input)
         llm = ChatOpenAI(
             model_name="gpt-3.5-turbo",
@@ -111,4 +123,4 @@ if user_input:
     # record & display assistant message
     st.session_state.messages.append({"role": "assistant", "content": answer})
     with st.chat_message("assistant"):
-        st.write(answer)
+        st.markdown(f"**🤖 Assistant:** {answer}")
