@@ -57,8 +57,7 @@ if "vectorstore" not in st.session_state:
 # 🧠 Define custom prompt for personality & follow‐up
 # ——————————————————————————————
 CUSTOM_SYSTEM_PROMPT = '''You are a friendly, conversational assistant who speaks like a colleague over coffee.
-Answer questions based only on the available information. If something isn’t clear or cannot be answered, simply say "I’m not sure based on the information provided."
-After giving your answer, ask one natural follow-up question to keep the conversation going.'''
+Answer questions based only on the available information. If something isn’t clear or cannot be answered, simply say "I’m not sure based on the information provided."'''
 
 
 prompt = PromptTemplate(
