@@ -118,7 +118,7 @@ if user_input:
         st.markdown(f"**🧑 You:** {user_input}")
 
     # process and generate response
-    with st.spinner("Thinking…"):
+   with st.spinner("Thinking…"):
         docs = st.session_state.vectorstore.similarity_search(user_input)
         llm = ChatOpenAI(
             model_name="gpt-3.5-turbo",
@@ -127,13 +127,13 @@ if user_input:
             max_tokens=512,
             openai_api_key=api_key
         )
-        chain = load_qa_chain(
-            llm,
-            chain_type="map_reduce",
-            map_prompt=map_prompt,
-            combine_prompt=combine_prompt
-        )
-        answer = chain.run(input_documents=docs, question=user_input)
+-       chain = load_qa_chain(
+-           llm,
+-           chain_type="map_reduce",
+-           map_prompt=map_prompt,
+-           combine_prompt=combine_prompt
+-       )
+       answer = chain.run(input_documents=docs, question=user_input)
 
     # record & display assistant reply
     st.session_state.messages.append({"role": "assistant", "content": answer})
