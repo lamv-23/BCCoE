@@ -2,10 +2,9 @@ import os
 import streamlit as st
 from PyPDF2 import PdfReader
 from langchain.text_splitter import CharacterTextSplitter
-from langchain.vectorstores import Chroma
+from langchain.vectorstores import DocArrayInMemorySearch
 from langchain.chains.question_answering import load_qa_chain
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
-from chromadb.config import Settings as ChromaSettings
 
 # Set Streamlit page settings
 st.set_page_config(page_title="BCCoE Chatbot")
@@ -38,10 +37,9 @@ text_splitter = CharacterTextSplitter(
 )
 chunks = text_splitter.split_text(text)
 
-# Create embeddings and vector store using in-memory Chroma
+# Create embeddings and in-memory vector store
 embeddings = OpenAIEmbeddings(api_key=api_key)
-chroma_settings = ChromaSettings(anonymized_telemetry=False, is_persistent=False)
-vectorstore = Chroma.from_texts(chunks, embedding=embeddings, client_settings=chroma_settings)
+vectorstore = DocArrayInMemorySearch.from_texts(chunks, embedding=embeddings)
 
 # Custom system prompt to control chatbot behaviour
 CUSTOM_SYSTEM_PROMPT = '''You are a helpful assistant that answers questions based only on the content of the provided PDFs.
