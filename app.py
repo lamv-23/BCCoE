@@ -96,14 +96,14 @@ for msg in st.session_state.messages:
 
 # ——————————————————————————————
 # ✍️ New user input
-# ——————————————————————————————
 user_input = st.chat_input("Type your question here…")
 if user_input:
     st.session_state.messages.append({"role": "user", "content": user_input})
     with st.chat_message("user"):
         st.markdown(f"**🧑 You:** {user_input}")
 
-       with st.spinner("Thinking…"):
+    # ─── Thinking Spinner ───────────────────────────────
+    with st.spinner("Thinking…"):
         docs = st.session_state.vectorstore.similarity_search(user_input)
         llm = ChatOpenAI(
             model_name="gpt-3.5-turbo",
@@ -113,16 +113,15 @@ if user_input:
             openai_api_key=api_key
         )
 
--       chain = load_qa_chain(llm, chain_type="map_reduce", prompt=prompt)
-+       chain = load_qa_chain(
-+           llm,
-+           chain_type="map_reduce",
-+           map_prompt=prompt,
-+           combine_prompt=prompt
-+       )
+        chain = load_qa_chain(
+            llm,
+            chain_type="map_reduce",
+            map_prompt=prompt,
+            combine_prompt=prompt
+        )
         answer = chain.run(input_documents=docs, question=user_input)
 
-
+    # ─── Record & display assistant reply ───────────────
     st.session_state.messages.append({"role": "assistant", "content": answer})
     with st.chat_message("assistant"):
         st.markdown(f"**🤖 Assistant:** {answer}")
