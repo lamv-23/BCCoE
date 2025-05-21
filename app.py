@@ -8,79 +8,101 @@ from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.chat_models import ChatOpenAI
 from langchain.prompts import PromptTemplate
 
-# Streamlit page configuration
+# ——————————————————————————————
+# 📄 Page config & session setup
+# ——————————————————————————————
 st.set_page_config(page_title="BCCoE Chatbot")
 st.title("Chat with project PDFs")
 
-# Retrieve OpenAI API key
+# initialise chat history
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+# ——————————————————————————————
+# 🔑 Load API key & vector store once
+# ——————————————————————————————
 api_key = st.secrets.get("OPENAI_API_KEY", os.environ.get("OPENAI_API_KEY"))
 if not api_key:
     st.error("OpenAI API key is required.")
     st.stop()
 
-# Load and extract text from all PDFs in the data/ folder
-PDF_DIR = "data"
-text = ""
-for filename in os.listdir(PDF_DIR):
-    if filename.lower().endswith(".pdf"):
-        path = os.path.join(PDF_DIR, filename)
-        with open(path, "rb") as f:
-            reader = PdfReader(f)
-            for page in reader.pages:
-                content = page.extract_text()
-                if content:
-                    text += content + "\n"
+if "vectorstore" not in st.session_state:
+    # load and extract all PDF text
+    text = ""
+    for fn in os.listdir("data"):
+        if fn.lower().endswith(".pdf"):
+            with open(os.path.join("data", fn), "rb") as f:
+                reader = PdfReader(f)
+                for page in reader.pages:
+                    txt = page.extract_text()
+                    if txt:
+                        text += txt + "\n"
 
-# Split the combined text into manageable chunks
-splitter = CharacterTextSplitter(
-    separator="\n",
-    chunk_size=1000,
-    chunk_overlap=200,
-    length_function=len
-)
-chunks = splitter.split_text(text)
+    # split into chunks
+    splitter = CharacterTextSplitter(
+        separator="\n",
+        chunk_size=1000,
+        chunk_overlap=200,
+        length_function=len
+    )
+    chunks = splitter.split_text(text)
 
-# Create embeddings and an in-memory vector store
-embeddings = OpenAIEmbeddings(openai_api_key=api_key)
-vectorstore = DocArrayInMemorySearch.from_texts(chunks, embedding=embeddings)
+    # embed and store in‐memory
+    embeddings = OpenAIEmbeddings(openai_api_key=api_key)
+    st.session_state.vectorstore = DocArrayInMemorySearch.from_texts(
+        chunks, embedding=embeddings
+    )
 
-# Define a custom system prompt to control responses
-CUSTOM_SYSTEM_PROMPT = '''You are a friendly, conversational assistant who speaks like a colleague over coffee. 
-Use contractions, a warm tone, and occasional humour. After your factual answer, always ask one leading question to guide the user deeper—for example, “Does that help, or would you like to know more about X?”
-
-Answer only from the provided PDFs. If you don’t know, say “I’m not sure, please contact the BCCoE team.”'''
-
+# ——————————————————————————————
+# 🧠 Define custom prompt for personality & follow‐up
+# ——————————————————————————————
+CUSTOM_SYSTEM_PROMPT = '''You are a friendly, conversational assistant who speaks like a colleague over coffee.
+Answer questions using only the provided PDFs. If you don’t know, say "I’m not sure based on these documents."
+After your answer, ask one follow-up question to guide the user deeper.'''
 
 prompt = PromptTemplate(
     input_variables=["context", "question"],
-    template=f"{CUSTOM_SYSTEM_PROMPT}\n\nContext:\n{{context}}\n\nQuestion:\n{{question}}"
+    template=f"""{CUSTOM_SYSTEM_PROMPT}
+
+Context:
+{{context}}
+
+Question:
+{{question}}"""
 )
 
-# User input
-query = st.text_input("Ask a question about the project documents:")
-if query:
+# ——————————————————————————————
+# 💬 Render chat history
+# ——————————————————————————————
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.write(msg["content"])
+
+# ——————————————————————————————
+# ✍️ New user input
+# ——————————————————————————————
+user_input = st.chat_input("Ask a question about the project documents:")
+if user_input:
+    # record & display user message
+    st.session_state.messages.append({"role": "user", "content": user_input})
+    with st.chat_message("user"):
+        st.write(user_input)
+
+    # generate assistant response
     with st.spinner("Thinking..."):
-        try:
-            # Retrieve relevant document chunks
-            docs = vectorstore.similarity_search(query)
+        docs = st.session_state.vectorstore.similarity_search(user_input)
+        llm = ChatOpenAI(
+            model_name="gpt-3.5-turbo",
+            temperature=0.3,       # mild creativity
+            top_p=0.9,
+            frequency_penalty=0.0,
+            presence_penalty=0.0,
+            openai_api_key=api_key
+        )
+        chain = load_qa_chain(llm, chain_type="stuff", prompt=prompt)
+        answer = chain.run(input_documents=docs, question=user_input)
 
-            # Instantiate the LLM with your desired creativity settings
-            llm = ChatOpenAI(
-                model_name="gpt-3.5-turbo",
-                temperature=0.2,          # Adjust creativity: 0.0 = factual, 1.0 = very creative
-                top_p=0.9,                # Nucleus sampling parameter
-                frequency_penalty=0.0,    # Penalise repeated tokens
-                presence_penalty=0.0,     # Encourage/discourage new topics
-                openai_api_key=api_key
-            )
-
-            # Build and run the QA chain
-            chain = load_qa_chain(llm, chain_type="stuff", prompt=prompt)
-            answer = chain.run(input_documents=docs, question=query)
-
-            # Display the answer
-            st.write("### Answer")
-            st.write(answer)
-
-        except Exception as err:
-            st.error(f"Error generating answer: {err}")
+    # record & display assistant message
+    st.session_state.messages.append({"role": "assistant", "content": answer})
+    with st.chat_message("assistant"):
+        st.write(answer)
