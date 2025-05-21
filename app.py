@@ -20,7 +20,7 @@ st.markdown(
     <div style="background-color:#333333; color:white; padding:15px; border-radius:8px; margin-bottom:20px">
       <h4 style="margin:0">👋 Welcome to the BCCoE Training Assistant</h4>
       <p style="margin:5px 0 0">
-        Ask me anything about our business case materials and I'll do my best to help.
+        Ask me anything about developing business cases and I'll do my best to help.
       </p>
     </div>
     """,
