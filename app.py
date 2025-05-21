@@ -40,7 +40,6 @@ if not api_key:
     st.stop()
 
 if "vectorstore" not in st.session_state:
-    # load and extract all PDF text
     text = ""
     for fn in os.listdir("data"):
         if fn.lower().endswith(".pdf"):
@@ -51,7 +50,6 @@ if "vectorstore" not in st.session_state:
                     if txt:
                         text += txt + "\n"
 
-    # split into chunks
     splitter = CharacterTextSplitter(
         separator="\n",
         chunk_size=1000,
@@ -60,18 +58,17 @@ if "vectorstore" not in st.session_state:
     )
     chunks = splitter.split_text(text)
 
-    # embed and store in-memory
     embeddings = OpenAIEmbeddings(openai_api_key=api_key)
     st.session_state.vectorstore = DocArrayInMemorySearch.from_texts(
         chunks, embedding=embeddings
     )
 
 # ——————————————————————————————
-# 🧠 Define custom prompt for personality & follow-up
+# 🧠 Define custom prompt for detail & structure
 # ——————————————————————————————
 CUSTOM_SYSTEM_PROMPT = '''You are a friendly, conversational assistant who speaks like a colleague over coffee.
-Give thorough, step-by-step explanations, including relevant examples or context.  
-If you make any claims, back them up with evidence from the information. Aim for at least 3–5 sentences per answer.
+Give thorough, step-by-step explanations, including relevant examples or context.
+If you make any claims, back them up with evidence. Aim for at least 3–5 sentences per answer.
 Format answers so that they’re easy to understand, using paragraphs and headings if needed.
 If something isn’t clear, say “I’m not sure, please contact a member of the team.”'''
 
@@ -102,30 +99,23 @@ for msg in st.session_state.messages:
 # ——————————————————————————————
 user_input = st.chat_input("Type your question here…")
 if user_input:
-    # record & display user message
     st.session_state.messages.append({"role": "user", "content": user_input})
     with st.chat_message("user"):
         st.markdown(f"**🧑 You:** {user_input}")
 
-    # generate assistant response
     with st.spinner("Thinking…"):
         docs = st.session_state.vectorstore.similarity_search(user_input)
-
         llm = ChatOpenAI(
             model_name="gpt-3.5-turbo",
-            temperature=0.3,       # mild creativity
+            temperature=0.3,    # mild creativity
             top_p=0.9,
-            frequency_penalty=0.0,
-            presence_penalty=0.0,
-            max_tokens=512,        # allow more detailed responses
+            max_tokens=512,     # allow more detailed responses
             openai_api_key=api_key
         )
-
-        # use 'refine' chain for richer, iterative answers
-        chain = load_qa_chain(llm, chain_type="refine", prompt=prompt)
+        # use map_reduce for iterative, detailed answers
+        chain = load_qa_chain(llm, chain_type="map_reduce", prompt=prompt)
         answer = chain.run(input_documents=docs, question=user_input)
 
-    # record & display assistant message
     st.session_state.messages.append({"role": "assistant", "content": answer})
     with st.chat_message("assistant"):
         st.markdown(f"**🤖 Assistant:** {answer}")
