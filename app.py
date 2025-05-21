@@ -64,7 +64,7 @@ if "vectorstore" not in st.session_state:
     )
 
 # ——————————————————————————————
-# 🧠 Define custom prompt for detail & structure
+# 🧠 Define custom prompts for map-reduce flow
 # ——————————————————————————————
 CUSTOM_SYSTEM_PROMPT = '''You are a friendly, conversational assistant who speaks like a colleague over coffee.
 Give thorough, step-by-step explanations, including relevant examples or context.
@@ -72,7 +72,8 @@ If you make any claims, back them up with evidence. Aim for at least 3–5 sente
 Format answers so that they’re easy to understand, using paragraphs and headings if needed.
 If something isn’t clear, say “I’m not sure, please contact a member of the team.”'''
 
-prompt = PromptTemplate(
+# Map prompt: applied to each chunk
+map_prompt = PromptTemplate(
     input_variables=["context", "question"],
     template=f"""{CUSTOM_SYSTEM_PROMPT}
 
@@ -80,6 +81,18 @@ Context:
 {{context}}
 
 Question:
+{{question}}"""
+)
+
+# Combine prompt: merges partial answers
+combine_prompt = PromptTemplate(
+    input_variables=["summaries", "question"],
+    template=f"""{CUSTOM_SYSTEM_PROMPT}
+
+You have the following partial answers from different sections:
+{{summaries}}
+
+Combine them into one coherent, detailed answer to the question:
 {{question}}"""
 )
 
@@ -96,13 +109,15 @@ for msg in st.session_state.messages:
 
 # ——————————————————————————————
 # ✍️ New user input
+# ——————————————————————————————
 user_input = st.chat_input("Type your question here…")
 if user_input:
+    # record & display user message
     st.session_state.messages.append({"role": "user", "content": user_input})
     with st.chat_message("user"):
         st.markdown(f"**🧑 You:** {user_input}")
 
-    # ─── Thinking Spinner ───────────────────────────────
+    # process and generate response
     with st.spinner("Thinking…"):
         docs = st.session_state.vectorstore.similarity_search(user_input)
         llm = ChatOpenAI(
@@ -112,16 +127,15 @@ if user_input:
             max_tokens=512,
             openai_api_key=api_key
         )
-
         chain = load_qa_chain(
             llm,
             chain_type="map_reduce",
-            map_prompt=prompt,
-            combine_prompt=prompt
+            map_prompt=map_prompt,
+            combine_prompt=combine_prompt
         )
         answer = chain.run(input_documents=docs, question=user_input)
 
-    # ─── Record & display assistant reply ───────────────
+    # record & display assistant reply
     st.session_state.messages.append({"role": "assistant", "content": answer})
     with st.chat_message("assistant"):
         st.markdown(f"**🤖 Assistant:** {answer}")
