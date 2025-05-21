@@ -109,10 +109,10 @@ if user_input:
     with st.spinner("Thinking…"):
         docs = st.session_state.vectorstore.similarity_search(user_input)
         llm = ChatOpenAI(
-            model_name="gpt-3.5-turbo",
+            model_name="gpt-3.5-turbo-16k",
             temperature=0.3,
             top_p=0.9,
-            max_tokens=512,
+            max_tokens=700,
             openai_api_key=api_key
         )
         chain = load_qa_chain(
