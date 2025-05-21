@@ -3,28 +3,17 @@ import tempfile
 import streamlit as st
 from PyPDF2 import PdfReader
 from langchain.text_splitter import CharacterTextSplitter
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_openai import OpenAIEmbeddings
+from langchain_openai import ChatOpenAI
 from langchain.vectorstores import FAISS
 from langchain.chains.question_answering import load_qa_chain
-from langchain_community.llms import HuggingFacePipeline
-from transformers import pipeline
-import ssl
-import requests
-import warnings
-
-# SSL verification workaround
-ssl._create_default_https_context = ssl._create_unverified_context
-os.environ['CURL_CA_BUNDLE'] = ''  # Disable certificate verification for curl
-os.environ['REQUESTS_CA_BUNDLE'] = ''  # Disable certificate verification for requests
-os.environ['SSL_CERT_FILE'] = ''  # Disable certificate verification globally
-
-# Suppress warnings about insecure requests
-warnings.filterwarnings('ignore', message='Unverified HTTPS request')
-requests.packages.urllib3.disable_warnings()
 
 # Set page title
 st.set_page_config(page_title="BCCoE Chatbot")
 st.title("Chat with your PDFs")
+
+# Get OpenAI API key from Streamlit secrets or environment variable
+openai_api_key = st.secrets.get("OPENAI_API_KEY", os.environ.get("OPENAI_API_KEY"))
 
 # Initialize session state variables
 if "processed_data" not in st.session_state:
@@ -56,11 +45,7 @@ if uploaded_files and not st.session_state.processed_data:
             chunks = text_splitter.split_text(text)
             
             # Create embeddings and store in vector database
-            embeddings = HuggingFaceEmbeddings(
-                model_name="all-MiniLM-L6-v2", 
-                model_kwargs={"trust_remote_code": True},
-                encode_kwargs={"normalize_embeddings": True}
-            )
+            embeddings = OpenAIEmbeddings(api_key=openai_api_key)
             st.session_state.vectorstore = FAISS.from_texts(chunks, embeddings)
             st.session_state.processed_data = True
             st.success("PDFs processed successfully! You can now ask questions.")
@@ -77,9 +62,12 @@ if st.session_state.processed_data:
                 # Search for relevant content
                 docs = st.session_state.vectorstore.similarity_search(query)
                 
-                # Use HuggingFace to generate an answer
-                llm_pipeline = pipeline("text-generation", model="google/flan-t5-base", max_length=512)
-                llm = HuggingFacePipeline(pipeline=llm_pipeline)
+                # Use ChatGPT to generate an answer
+                llm = ChatOpenAI(
+                    model_name="gpt-3.5-turbo", 
+                    temperature=0,
+                    api_key=openai_api_key
+                )
                 chain = load_qa_chain(llm, chain_type="stuff")
                 response = chain.run(input_documents=docs, question=query)
                 
