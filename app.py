@@ -64,7 +64,7 @@ if query:
             # Instantiate the LLM with your desired creativity settings
             llm = ChatOpenAI(
                 model_name="gpt-3.5-turbo",
-                temperature=0.3,          # Adjust creativity: 0.0 = factual, 1.0 = very creative
+                temperature=0.2,          # Adjust creativity: 0.0 = factual, 1.0 = very creative
                 top_p=0.9,                # Nucleus sampling parameter
                 frequency_penalty=0.0,    # Penalise repeated tokens
                 presence_penalty=0.0,     # Encourage/discourage new topics
