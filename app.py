@@ -71,10 +71,9 @@ if "vectorstore" not in st.session_state:
 # ——————————————————————————————
 CUSTOM_SYSTEM_PROMPT = '''You are a friendly, conversational assistant who speaks like a colleague over coffee.
 Give thorough, step-by-step explanations, including relevant examples or context.  
-If you make any claims, back them up with evidence from the information.  Aim for at least 3-5 sentences per answer.
-Format answers so that it is easy for people to understand. Use paragraphs and headings if needed.
+If you make any claims, back them up with evidence from the information. Aim for at least 3–5 sentences per answer.
+Format answers so that they’re easy to understand, using paragraphs and headings if needed.
 If something isn’t clear, say “I’m not sure, please contact a member of the team.”'''
-
 
 prompt = PromptTemplate(
     input_variables=["context", "question"],
@@ -91,14 +90,12 @@ Question:
 # 💬 Render chat history with styled bubbles
 # ——————————————————————————————
 for msg in st.session_state.messages:
-    role = msg["role"]
-    content = msg["content"]
-    if role == "user":
+    if msg["role"] == "user":
         with st.chat_message("user"):
-            st.markdown(f"**🧑 You:** {content}")
+            st.markdown(f"**🧑 You:** {msg['content']}")
     else:
         with st.chat_message("assistant"):
-            st.markdown(f"**🤖 Assistant:** {content}")
+            st.markdown(f"**🤖 Assistant:** {msg['content']}")
 
 # ——————————————————————————————
 # ✍️ New user input
@@ -113,15 +110,19 @@ if user_input:
     # generate assistant response
     with st.spinner("Thinking…"):
         docs = st.session_state.vectorstore.similarity_search(user_input)
+
         llm = ChatOpenAI(
             model_name="gpt-3.5-turbo",
             temperature=0.3,       # mild creativity
             top_p=0.9,
             frequency_penalty=0.0,
             presence_penalty=0.0,
+            max_tokens=512,        # allow more detailed responses
             openai_api_key=api_key
         )
-        chain = load_qa_chain(llm, chain_type="stuff", prompt=prompt)
+
+        # use 'refine' chain for richer, iterative answers
+        chain = load_qa_chain(llm, chain_type="refine", prompt=prompt)
         answer = chain.run(input_documents=docs, question=user_input)
 
     # record & display assistant message
