@@ -12,7 +12,7 @@ from langchain.prompts import PromptTemplate
 # 📄 Page config & session setup
 # ——————————————————————————————
 st.set_page_config(page_title="BCCoE Chatbot")
-st.title("Chat with project PDFs")
+st.title("BCCoE Training Assistant")
 
 # initialise chat history
 if "messages" not in st.session_state:
