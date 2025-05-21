@@ -64,7 +64,7 @@ if "vectorstore" not in st.session_state:
     )
 
 # ——————————————————————————————
-# 🧠 Define custom prompts for map-reduce flow
+# 🧠 Define custom prompt for detail & structure
 # ——————————————————————————————
 CUSTOM_SYSTEM_PROMPT = '''You are a friendly, conversational assistant who speaks like a colleague over coffee.
 Give thorough, step-by-step explanations, including relevant examples or context.
@@ -72,8 +72,8 @@ If you make any claims, back them up with evidence. Aim for at least 3–5 sente
 Format answers so that they’re easy to understand, using paragraphs and headings if needed.
 If something isn’t clear, say “I’m not sure, please contact a member of the team.”'''
 
-# Map prompt: applied to each chunk
-map_prompt = PromptTemplate(
+# Single-prompt for the “stuff” chain
+prompt = PromptTemplate(
     input_variables=["context", "question"],
     template=f"""{CUSTOM_SYSTEM_PROMPT}
 
@@ -81,18 +81,6 @@ Context:
 {{context}}
 
 Question:
-{{question}}"""
-)
-
-# Combine prompt: merges partial answers
-combine_prompt = PromptTemplate(
-    input_variables=["summaries", "question"],
-    template=f"""{CUSTOM_SYSTEM_PROMPT}
-
-You have the following partial answers from different sections:
-{{summaries}}
-
-Combine them into one coherent, detailed answer to the question:
 {{question}}"""
 )
 
@@ -118,7 +106,7 @@ if user_input:
         st.markdown(f"**🧑 You:** {user_input}")
 
     # process and generate response
-   with st.spinner("Thinking…"):
+    with st.spinner("Thinking…"):
         docs = st.session_state.vectorstore.similarity_search(user_input)
         llm = ChatOpenAI(
             model_name="gpt-3.5-turbo",
@@ -127,13 +115,12 @@ if user_input:
             max_tokens=512,
             openai_api_key=api_key
         )
--       chain = load_qa_chain(
--           llm,
--           chain_type="map_reduce",
--           map_prompt=map_prompt,
--           combine_prompt=combine_prompt
--       )
-       answer = chain.run(input_documents=docs, question=user_input)
+        chain = load_qa_chain(
+            llm,
+            chain_type="stuff",
+            prompt=prompt
+        )
+        answer = chain.run(input_documents=docs, question=user_input)
 
     # record & display assistant reply
     st.session_state.messages.append({"role": "assistant", "content": answer})
