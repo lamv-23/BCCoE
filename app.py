@@ -40,8 +40,8 @@ embeddings = OpenAIEmbeddings(api_key=api_key)
 vectorstore = Chroma.from_texts(chunks, embedding=embeddings)
 
 # Prompt template to control behaviour
-CUSTOM_SYSTEM_PROMPT = """You are a helpful assistant that answers questions based only on the content of the uploaded PDFs. 
-Do not guess or make up answers. If you cannot find the answer, say "I'm not sure based on the provided documents.""""
+CUSTOM_SYSTEM_PROMPT = '''You are a helpful assistant that answers questions based only on the content of the uploaded PDFs.
+Do not guess or make up answers. If you cannot find the answer, say "I'm not sure based on the provided documents."'''
 
 # Handle question input
 query = st.text_input("Ask a question about the project:")
