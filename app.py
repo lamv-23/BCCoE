@@ -90,7 +90,6 @@ Structure your answer with Markdown:
 - Subheadings (## Subheading)
 - Bullet lists or numbered steps
 - **Bold** for key terms, _italics_ for emphasis
-- Use emojis where appropriate but no more than 4 per answer.
 
 If something isn’t clear, say “I’m not sure, please contact a member of the team.”'''
 
