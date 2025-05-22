@@ -9,9 +9,25 @@ from langchain.chat_models import ChatOpenAI
 from langchain.prompts import PromptTemplate
 
 # ——————————————————————————————
-# 📄 Page config & session setup
+# 📄 Page config & custom CSS
 # ——————————————————————————————
 st.set_page_config(page_title="BCCoE Chatbot")
+
+# Inject CSS to shrink Markdown headings
+st.markdown(
+    """
+    <style>
+      h1, h2 {
+        font-size: 1.25rem !important;
+      }
+      h3 {
+        font-size: 1.1rem !important;
+      }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 st.title("BCCoE Training Assistant")
 
 # Welcome banner with darker background and white text
@@ -70,8 +86,8 @@ CUSTOM_SYSTEM_PROMPT = '''You are a friendly, conversational assistant who speak
 Give thorough, step-by-step explanations, including relevant examples or context.  
 If you make any claims, back them up with evidence. Aim for at least 3–5 sentences per answer.  
 Structure your answer with Markdown:
-- A top-level heading (`# Heading`)
-- Subheadings (`## Subheading`)
+- A top-level heading (# Heading)
+- Subheadings (## Subheading)
 - Bullet lists or numbered steps
 - **Bold** for key terms, _italics_ for emphasis
 - Code blocks (triple backticks) for any examples
