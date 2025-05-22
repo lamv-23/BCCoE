@@ -28,7 +28,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.title("BCCoE Training Assistant")
+st.title("BCCoE Assistant")
 
 # Welcome banner with darker background and white text
 st.markdown(
