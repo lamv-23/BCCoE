@@ -64,20 +64,20 @@ if "vectorstore" not in st.session_state:
     )
 
 # ——————————————————————————————
-# 🧠 Define custom prompt for detail & structure
+# 🧠 Define custom prompt for detail & Markdown
 # ——————————————————————————————
-CUSTOM_SYSTEM_PROMPT = '''You are a friendly, conversational assistant who speaks like a colleague over coffee.
-Give thorough, step-by-step explanations, including relevant examples or context.
-If you make any claims, back them up with evidence. Aim for at least 3–5 sentences per answer.
-Structure your answer with:
+CUSTOM_SYSTEM_PROMPT = '''You are a friendly, conversational assistant who speaks like a colleague over coffee.  
+Give thorough, step-by-step explanations, including relevant examples or context.  
+If you make any claims, back them up with evidence. Aim for at least 3–5 sentences per answer.  
+Structure your answer with Markdown:
 - A top-level heading (`# Heading`)
-- Subheadings (`## Subheading`) where it makes sense  
-- Bullet lists or numbered steps for any lists  
-- **Bold** for key terms, _italics_ for emphasis  
-- Code blocks (triple backticks) for any examples or snippets
+- Subheadings (`## Subheading`)
+- Bullet lists or numbered steps
+- **Bold** for key terms, _italics_ for emphasis
+- Code blocks (triple backticks) for any examples
+
 If something isn’t clear, say “I’m not sure, please contact a member of the team.”'''
 
-# Single-prompt for the “stuff” chain
 prompt = PromptTemplate(
     input_variables=["context", "question"],
     template=f"""{CUSTOM_SYSTEM_PROMPT}
@@ -97,8 +97,9 @@ for msg in st.session_state.messages:
         with st.chat_message("user"):
             st.markdown(f"**🧑 You:** {msg['content']}")
     else:
+        # render assistant's full Markdown response
         with st.chat_message("assistant"):
-            st.markdown(f"**🤖 Assistant:** {msg['content']}")
+            st.markdown(msg["content"], unsafe_allow_html=False)
 
 # ——————————————————————————————
 # ✍️ New user input
@@ -130,4 +131,4 @@ if user_input:
     # record & display assistant reply
     st.session_state.messages.append({"role": "assistant", "content": answer})
     with st.chat_message("assistant"):
-        st.markdown(f"**🤖 Assistant:** {answer}")
+        st.markdown(answer, unsafe_allow_html=False)
