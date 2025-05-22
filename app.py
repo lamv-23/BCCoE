@@ -131,7 +131,7 @@ if user_input:
         docs = st.session_state.vectorstore.similarity_search(user_input)
         llm = ChatOpenAI(
             model_name="gpt-3.5-turbo-16k",
-            temperature=0.3,
+            temperature=0.3, # controls randomness/creativity: 0.0 = fully deterministic, 1.0 = very creative (higher = more varied responses)
             top_p=0.9,
             max_tokens=700,
             openai_api_key=api_key
