@@ -1,24 +1,26 @@
 import os
+import pickle
 import streamlit as st
 from PyPDF2 import PdfReader
-from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
 from langchain.text_splitter import CharacterTextSplitter
+from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.vectorstores import DocArrayInMemorySearch
 from langchain.chains.question_answering import load_qa_chain
-from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.chat_models import ChatOpenAI
 from langchain.prompts import PromptTemplate
-from openai.error import RateLimitError
 
 # ——————————————————————————————
 # 📄 Page config & custom CSS
 # ——————————————————————————————
 st.set_page_config(page_title="BCCoE CBA Guide Assistant")
+
 st.markdown(
     """
     <style>
+      /* Shrink Markdown headings */
       h1, h2 { font-size: 1.25rem !important; }
-      h3 { font-size: 1.1rem !important; }
+      h3     { font-size: 1.1rem  !important; }
+      /* Style the chat input box */
       div[data-testid="stChatInputContainer"] textarea {
         background-color: #e0f7fa !important;
         color: #000 !important;
@@ -28,25 +30,22 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
 st.title("BCCoE CBA Guide Assistant")
 
 # ——————————————————————————————
-# 🛠️ Retry wrapper for embedding step
+# 🔑 Load & cache vectorstore once
 # ——————————————————————————————
-@retry(
-    retry=retry_if_exception_type(RateLimitError),
-    wait=wait_exponential(multiplier=1, min=2, max=10),
-    stop=stop_after_attempt(5),
-)
-def embed_documents_retry(embeddings, texts):
-    return embeddings.embed_documents(texts)
+VECTORSTORE_PATH = "vectorstore.pkl"
 
-# ——————————————————————————————
-# 📦 Load & cache vectorstore once
-# ——————————————————————————————
 @st.cache_resource
 def load_vectorstore(api_key: str):
-    # read all PDFs
+    # If we've already embedded and saved, just load it
+    if os.path.exists(VECTORSTORE_PATH):
+        with open(VECTORSTORE_PATH, "rb") as f:
+            return pickle.load(f)
+
+    # Otherwise, read PDFs and split into chunks
     full_text = ""
     for fn in os.listdir("data"):
         if fn.lower().endswith(".pdf"):
@@ -57,29 +56,34 @@ def load_vectorstore(api_key: str):
                     full_text += txt + "\n"
 
     splitter = CharacterTextSplitter(
-        separator="\n", chunk_size=1000, chunk_overlap=200, length_function=len
+        separator="\n",
+        chunk_size=1000,
+        chunk_overlap=200,
+        length_function=len
     )
     chunks = splitter.split_text(full_text)
 
+    # Create embeddings and vectorstore
     embeddings = OpenAIEmbeddings(openai_api_key=api_key)
-    # use our retry wrapper here
-    vectors = DocArrayInMemorySearch.from_texts(
-        chunks, embedding=embeddings, embedding_function=lambda ts: embed_documents_retry(embeddings, ts)
-    )
-    return vectors
+    vectorstore = DocArrayInMemorySearch.from_texts(chunks, embedding=embeddings)
 
-# ——————————————————————————————
-# 🔑 Initialise API key & vectorstore
-# ——————————————————————————————
+    # Persist to disk so we don't re-embed next time
+    with open(VECTORSTORE_PATH, "wb") as f:
+        pickle.dump(vectorstore, f)
+
+    return vectorstore
+
+# Retrieve API key
 api_key = st.secrets.get("OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY")
 if not api_key:
     st.error("OpenAI API key is required.")
     st.stop()
 
+# Load (or build) the vectorstore
 vectorstore = load_vectorstore(api_key)
 
 # ——————————————————————————————
-# 🧠 Prompt setup
+# 🧠 Define custom prompt for detail & Markdown
 # ——————————————————————————————
 CUSTOM_SYSTEM_PROMPT = '''You are a friendly, conversational assistant and an expert guide on cost–benefit analysis (CBA).
 Help users understand and apply the CBA Guides step by step, drawing only on its methodologies and examples.
@@ -106,12 +110,11 @@ Question:
 )
 
 # ——————————————————————————————
-# 💬 Chat UI
+# 💬 Render chat history
 # ——————————————————————————————
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# render history
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         if msg["role"] == "assistant":
@@ -119,25 +122,34 @@ for msg in st.session_state.messages:
         else:
             st.markdown(f"**🧑 You:** {msg['content']}")
 
-# new input
+# ——————————————————————————————
+# ✍️ Handle new user input
+# ——————————————————————————————
 user_input = st.chat_input("Type your question here…")
 if user_input:
+    # log user message
     st.session_state.messages.append({"role": "user", "content": user_input})
     with st.chat_message("user"):
         st.markdown(f"**🧑 You:** {user_input}")
 
+    # generate answer
     with st.spinner("Thinking…"):
         docs = vectorstore.similarity_search(user_input)
         llm = ChatOpenAI(
             model_name="gpt-3.5-turbo-16k",
-            temperature=0.2,  # controls randomness/creativity: 0.0 = deterministic, 1.0 = creative
+            temperature=0.2,  # controls randomness/creativity: 0.0 = deterministic, 1.0 = very creative
             top_p=0.9,
-            max_tokens=700,   # caps length of response
+            max_tokens=700,
             openai_api_key=api_key
         )
-        chain = load_qa_chain(llm, chain_type="stuff", prompt=prompt)
+        chain = load_qa_chain(
+            llm,
+            chain_type="stuff",
+            prompt=prompt
+        )
         answer = chain.run(input_documents=docs, question=user_input)
 
+    # log and display assistant message
     st.session_state.messages.append({"role": "assistant", "content": answer})
     with st.chat_message("assistant"):
         st.markdown(answer, unsafe_allow_html=False)
