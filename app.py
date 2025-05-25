@@ -11,7 +11,7 @@ from langchain.prompts import PromptTemplate
 # ——————————————————————————————
 # 📄 Page config & custom CSS
 # ——————————————————————————————
-st.set_page_config(page_title="BCCoE Chatbot")
+st.set_page_config(page_title="BCCoE CBA Guide Assistant")
 
 # Inject CSS to shrink Markdown headings
 st.markdown(
@@ -28,7 +28,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.title("BCCoE Assistant")
+st.title("BCCoE CBA Guide Assistant")
 
 # Welcome banner with darker background and white text
 st.markdown(
@@ -36,7 +36,7 @@ st.markdown(
     <div style="background-color:#333333; color:white; padding:15px; border-radius:8px; margin-bottom:20px">
       <h4 style="margin:0">👋 Welcome to the BCCoE Training Assistant</h4>
       <p style="margin:5px 0 0">
-        Ask me anything about developing business cases and I'll do my best to help.
+        Ask me anything about developing CBAs and I'll do my best to help.
       </p>
     </div>
     """,
