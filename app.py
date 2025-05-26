@@ -6,7 +6,7 @@ import pdfplumber
 from PyPDF2 import PdfReader
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.vectorstores import DocArrayInMemorySearch
-from langchain.chains.question_answering import load_qa_chain
+from langchain.chains import LLMChain
 from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.chat_models import ChatOpenAI
 from langchain.prompts import PromptTemplate
@@ -15,106 +15,83 @@ from langchain.prompts import PromptTemplate
 # 📄 Page config & custom CSS
 # ——————————————————————————————
 st.set_page_config(page_title="BCCoE CBA Guide Assistant")
-
-st.markdown(
-    """
-    <style>
-      h1, h2 { font-size: 1.25rem !important; }
-      h3     { font-size: 1.1rem  !important; }
-      div[data-testid="stChatInputContainer"] textarea {
-        background-color: #e0f7fa !important;
-        border-radius: 4px !important;
-      }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+st.markdown("""
+  <style>
+    h1, h2 { font-size:1.25rem!important; }
+    h3     { font-size:1.1rem!important; }
+    div[data-testid="stChatInputContainer"] textarea {
+      background-color:#e0f7fa!important;
+      border-radius:4px!important;
+    }
+  </style>
+""", unsafe_allow_html=True)
 
 st.title("BCCoE CBA Guide Assistant")
-st.markdown(
-    """
-    <div style="background-color:#333333; color:white; padding:15px; border-radius:8px; margin-bottom:20px">
-      <h4 style="margin:0">👋 Welcome to the CBA Guide Assistant</h4>
-      <p style="margin:5px 0 0">
-        Ask me anything about cost–benefit analysis guides and I'll do my best to help.
-      </p>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+st.markdown("""
+  <div style="background-color:#333; color:white; padding:15px; border-radius:8px; margin-bottom:20px">
+    <h4 style="margin:0">👋 Welcome to the CBA Guide Assistant</h4>
+    <p style="margin:5px 0 0">Ask me anything about cost–benefit analysis guides and I'll do my best to help.</p>
+  </div>
+""", unsafe_allow_html=True)
 
 # initialise chat history
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
 # ——————————————————————————————
-# 🔑 Load API key & vector store once, plus table extraction
+# 🔑 Load & cache vector store + tables
 # ——————————————————————————————
 @st.cache_resource
 def init_store_and_tables(api_key: str):
-    # 1) Read & combine text, extract tables
-    all_text = ""
-    pdf_tables: dict[str, list[pd.DataFrame]] = {}
-    file_texts: dict[str, str] = {}
+    file_texts = {}
+    pdf_tables = {}
 
     for fn in sorted(os.listdir("data")):
         if not fn.lower().endswith(".pdf"):
             continue
         path = os.path.join("data", fn)
-
-        # — Extract full text
+        # Extract text
         reader = PdfReader(path)
-        pages = [page.extract_text() or "" for page in reader.pages]
-        text = "\n".join(pages)
+        text = "\n".join(p.extract_text() or "" for p in reader.pages)
         file_texts[fn] = text
-        all_text += text + "\n"
 
-        # — Extract tables with pdfplumber, clean headers
-        tables: list[pd.DataFrame] = []
+        # Extract tables
+        tables = []
         with pdfplumber.open(path) as pdf:
             for page in pdf.pages:
                 for raw_tbl in page.extract_tables():
-                    if not raw_tbl or len(raw_tbl) < 2:
+                    if len(raw_tbl) < 2:
                         continue
-                    raw_header = raw_tbl[0]
-                    header_counts: dict[str,int] = {}
-                    clean_header: list[str] = []
-                    for col in raw_header:
-                        name = col.strip() if isinstance(col, str) and col.strip() else "column"
-                        count = header_counts.get(name, 0)
-                        header_counts[name] = count + 1
-                        if count:
-                            name = f"{name}_{count}"
-                        name = re.sub(r"\W+", "_", name).lower()
-                        clean_header.append(name)
-                    df = pd.DataFrame(raw_tbl[1:], columns=clean_header)
+                    header = raw_tbl[0]
+                    # Clean duplicates
+                    counts = {}
+                    cols = []
+                    for h in header:
+                        name = (h or "column").strip()
+                        c = counts.get(name, 0)
+                        counts[name] = c + 1
+                        key = f"{name}_{c}" if c else name
+                        cols.append(re.sub(r"\W+", "_", key).lower())
+                    df = pd.DataFrame(raw_tbl[1:], columns=cols)
                     tables.append(df)
         pdf_tables[fn] = tables
 
-    # 2) Split each file's text into chunks, tag with metadata
+    # Split + metadata
     splitter = CharacterTextSplitter(
-        separator="\n",
-        chunk_size=3500,
-        chunk_overlap=100,
-        length_function=len
+        separator="\n", chunk_size=3500, chunk_overlap=100, length_function=len
     )
-    all_chunks: list[str] = []
-    all_metadatas: list[dict] = []
+    chunks, metadatas = [], []
     for fn, text in file_texts.items():
-        chunks = splitter.split_text(text)
-        for chunk in chunks:
-            all_chunks.append(chunk)
-            all_metadatas.append({"source": fn})
+        for chunk in splitter.split_text(text):
+            chunks.append(chunk)
+            metadatas.append({"source": fn})
 
-    # 3) Embed and build vectorstore
+    # Build vector store
     embeddings = OpenAIEmbeddings(openai_api_key=api_key)
-    vectorstore = DocArrayInMemorySearch.from_texts(
-        all_chunks, embedding=embeddings, metadatas=all_metadatas
-    )
+    vs = DocArrayInMemorySearch.from_texts(chunks, embedding=embeddings, metadatas=metadatas)
+    return vs, pdf_tables
 
-    return vectorstore, pdf_tables
-
-api_key = st.secrets.get("OPENAI_API_KEY", os.environ.get("OPENAI_API_KEY"))
+api_key = st.secrets.get("OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY")
 if not api_key:
     st.error("OpenAI API key is required.")
     st.stop()
@@ -122,28 +99,25 @@ if not api_key:
 vectorstore, pdf_tables = init_store_and_tables(api_key)
 
 # ——————————————————————————————
-# 🧠 System prompt & PromptTemplate
+# 🧠 PromptTemplate & system prompt
 # ——————————————————————————————
-CUSTOM_SYSTEM_PROMPT = '''You are a friendly, conversational assistant and expert on Cost–Benefit Analysis (CBA) Guides.  
-Use only the provided excerpts—each chunk is tagged with its source guide.  
-When you answer, mention the guide by name, for example:
-> “According to *{source}* (section …), …”
+CUSTOM_SYSTEM_PROMPT = '''You are a friendly, expert assistant on Cost–Benefit Analysis Guides.
+Use only the provided excerpts—each chunk is tagged with its source guide.
+Answer in 3–5 sentences minimum, include worked examples, and format in Markdown:
+- `# Heading` for topics
+- `## Subheading` for steps
+- Bullet/numbered lists
+- **Bold** definitions, _italics_ for emphasis
+- ```code blocks``` for formulas.
 
-Aim for 3–5 sentences minimum, include worked examples, and format in Markdown:
-- `# Heading` to introduce topics  
-- `## Subheading` for steps or concepts  
-- Bullet or numbered lists for procedures  
-- **Bold** for definitions, _italics_ for emphasis  
-- ```code blocks``` for formulas or numerical examples  
-
-If the guide doesn’t cover the question, say:
-> “I’m not sure based on the guides — please check the relevant section or contact a team member.”'''
+If you can’t answer, say:
+“I’m not sure based on the guides—please check the relevant section or contact a team member.”'''
 
 prompt = PromptTemplate(
-    input_variables=["context", "question", "source"],
+    input_variables=["context", "question"],
     template=f"""{CUSTOM_SYSTEM_PROMPT}
 
-Context (from {{source}}):
+Context:
 {{context}}
 
 Question:
@@ -151,7 +125,7 @@ Question:
 )
 
 # ——————————————————————————————
-# 💬 Render chat history
+# Render chat history
 # ——————————————————————————————
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
@@ -161,7 +135,7 @@ for msg in st.session_state.messages:
             st.markdown(f"**🧑 You:** {msg['content']}")
 
 # ——————————————————————————————
-# ✍️ Handle new user input
+# Handle new input
 # ——————————————————————————————
 user_input = st.chat_input("Type your question here…")
 if user_input:
@@ -170,17 +144,16 @@ if user_input:
         st.markdown(f"**🧑 You:** {user_input}")
 
     with st.spinner("Thinking…"):
-        # retrieve top‑5 chunks
+        # retrieve top-5 docs
         docs = vectorstore.similarity_search(user_input, k=5)
-        contexts = [d.page_content for d in docs]
-        sources  = [d.metadata.get("source","unknown") for d in docs]
 
-        chain_input = {
-            "context": "\n\n".join(contexts),
-            "question": user_input,
-            "source": sources[0]
-        }
+        # build one big context string
+        big_context = "\n\n---\n\n".join(
+            f"**From {d.metadata['source']}:**\n{d.page_content}"
+            for d in docs
+        )
 
+        # call LLMChain
         llm = ChatOpenAI(
             model_name="gpt-3.5-turbo-16k",
             temperature=0.2,
@@ -188,26 +161,27 @@ if user_input:
             max_tokens=700,
             openai_api_key=api_key
         )
-        chain = load_qa_chain(llm, chain_type="stuff", prompt=prompt)
-        answer = chain.run(**chain_input)
+        chain = LLMChain(llm=llm, prompt=prompt)
+        answer = chain.run({"context": big_context, "question": user_input})
 
-    # record & display assistant reply
+    # append & display
     st.session_state.messages.append({"role": "assistant", "content": answer})
     with st.chat_message("assistant"):
         st.markdown(answer, unsafe_allow_html=False)
 
-    # only show tables when question mentions "table"
+    # only show tables when question mentions “table”
     if "table" in user_input.lower():
         st.subheader("Related Tables from Guides")
         shown = set()
-        for src in sources:
+        for d in docs:
+            src = d.metadata["source"]
             if src in shown:
                 continue
             shown.add(src)
-            tables = pdf_tables.get(src, [])
-            if not tables:
+            tbls = pdf_tables.get(src, [])
+            if not tbls:
                 continue
             with st.expander(f"Tables in {src}"):
-                for i, df in enumerate(tables, start=1):
+                for i, df in enumerate(tbls, 1):
                     st.write(f"**Table {i}:**")
                     st.dataframe(df, use_container_width=True)
