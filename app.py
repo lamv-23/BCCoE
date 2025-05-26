@@ -5,71 +5,142 @@ from langchain.text_splitter import CharacterTextSplitter
 from langchain.vectorstores import DocArrayInMemorySearch
 from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.chat_models import ChatOpenAI
-from langchain.chains import ConversationalRetrievalChain
-from langchain.memory import ConversationBufferMemory
+from langchain.chains import LLMChain
+from langchain.prompts import PromptTemplate
 
 # ——————————————————————————————
-# Streamlit setup
+# 📄 Streamlit page config & CSS
 # ——————————————————————————————
-st.set_page_config(page_title="CBA Guide Assistant")
-st.title("CBA Guide Assistant")
+st.set_page_config(page_title="BCCoE CBA Guide Assistant")
+st.markdown(
+    """
+    <style>
+      /* Shrink markdown headings */
+      h1, h2 { font-size: 1.25rem !important; }
+      h3      { font-size: 1.1rem  !important; }
+      /* Colour the input box */
+      .st-TextInput>div>div>input {
+        background-color: #f0f0f5 !important;
+      }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+st.title("BCCoE CBA Guide Assistant")
 
-# load API key
+# Welcome banner
+st.markdown(
+    """
+    <div style="background-color:#333333; color:white; padding:15px; border-radius:8px; margin-bottom:20px">
+      <h4 style="margin:0">👋 Welcome to the CBA Guide Assistant</h4>
+      <p style="margin:5px 0 0">
+        Ask me anything about cost–benefit analysis guides.
+      </p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+# ——————————————————————————————
+# 🔑 Load API key & build vector store once
+# ——————————————————————————————
 api_key = st.secrets.get("OPENAI_API_KEY", os.environ.get("OPENAI_API_KEY"))
 if not api_key:
-    st.error("Missing OpenAI key")
+    st.error("OpenAI API key is required.")
     st.stop()
 
-# load & index PDFs once
 if "vectorstore" not in st.session_state:
-    text = ""
+    # Read all PDFs under data/
+    combined_text = ""
     for fn in os.listdir("data"):
         if fn.lower().endswith(".pdf"):
             with open(os.path.join("data", fn), "rb") as f:
                 reader = PdfReader(f)
-                for p in reader.pages:
-                    text += (p.extract_text() or "") + "\n"
-    chunks = CharacterTextSplitter(1000, 200).split_text(text)
-    embeds = OpenAIEmbeddings(openai_api_key=api_key)
-    st.session_state.vectorstore = DocArrayInMemorySearch.from_texts(chunks, embedding=embeds)
+                for page in reader.pages:
+                    combined_text += (page.extract_text() or "") + "\n"
 
-# prepare memory & chain
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
+    # Split into chunks
+    splitter = CharacterTextSplitter(
+        separator="\n", chunk_size=1000, chunk_overlap=200, length_function=len
+    )
+    chunks = splitter.split_text(combined_text)
 
-memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
-llm = ChatOpenAI(
-    model_name="gpt-3.5-turbo-16k",
-    temperature=0.2,
-    openai_api_key=api_key
+    # Create embeddings & vector store
+    embeddings = OpenAIEmbeddings(openai_api_key=api_key)
+    st.session_state.vectorstore = DocArrayInMemorySearch.from_texts(
+        chunks, embedding=embeddings
+    )
+
+# ——————————————————————————————
+# 🧠 Custom system prompt & PromptTemplate
+# ——————————————————————————————
+CUSTOM_SYSTEM_PROMPT = '''You are a friendly, conversational assistant and an expert guide on cost–benefit analysis (CBA).
+Help users understand and apply the CBA Guides step by step, drawing only on its methodologies and examples.
+If you reference any principle or calculation, cite the relevant section or example from the Guide.
+Aim for clear, concise explanations of at least 3–5 sentences, including worked examples where helpful.
+Structure your answer in Markdown:
+- **# Heading:** to introduce the topic
+- **## Subheadings:** for key steps or concepts
+- **Bullet lists** or **numbered steps** for procedures
+- **Bold** for definitions, _italics_ for emphasis
+- Code or formula blocks (triple backticks) for numerical examples
+
+If you can’t answer from the Guide, say: “I’m not sure based on the guides — please check the relevant guide or contact a team member.”'''
+
+prompt = PromptTemplate(
+    input_variables=["context", "question"],
+    template=f"""{CUSTOM_SYSTEM_PROMPT}
+
+Context:
+{{context}}
+
+Question:
+{{question}}"""
 )
 
-conv_chain = ConversationalRetrievalChain.from_llm(
-    llm=llm,
-    retriever=st.session_state.vectorstore.as_retriever(),
-    memory=memory,
-    verbose=True
-)
+# ——————————————————————————————
+# 💬 Initialise chat history
+# ——————————————————————————————
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-# render history
-for turn in st.session_state.chat_history:
-    with st.chat_message(turn["role"]):
-        st.markdown(turn["content"])
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        # assistant content is already markdown
+        if msg["role"] == "assistant":
+            st.markdown(msg["content"], unsafe_allow_html=False)
+        else:
+            st.markdown(f"**🧑 You:** {msg['content']}")
 
-# new user input
-user_msg = st.chat_input("Ask about the CBA guides…")
-if user_msg:
-    # echo user
-    st.session_state.chat_history.append({"role": "user", "content": user_msg})
+# ——————————————————————————————
+# ✍️ Handle new user input
+# ——————————————————————————————
+user_input = st.chat_input("Type your question here…")
+if user_input:
+    # Echo user
+    st.session_state.messages.append({"role": "user", "content": user_input})
     with st.chat_message("user"):
-        st.markdown(user_msg)
+        st.markdown(f"**🧑 You:** {user_input}")
 
-    # get answer
+    # Retrieval + LLMChain
     with st.spinner("Thinking…"):
-        result = conv_chain({"question": user_msg})
-        answer = result["answer"]
+        # 1) find relevant chunks
+        docs = st.session_state.vectorstore.similarity_search(user_input)
+        # 2) combine into one context string
+        context = "\n\n".join(d.page_content for d in docs)
+        # 3) instantiate LLM and chain
+        llm = ChatOpenAI(
+            model_name="gpt-3.5-turbo-16k",
+            temperature=0.2,   # lower = more focused, higher = more creative
+            top_p=0.9,
+            max_tokens=700,
+            openai_api_key=api_key
+        )
+        chain = LLMChain(llm=llm, prompt=prompt)
+        # 4) generate answer
+        answer = chain.predict(context=context, question=user_input)
 
-    # display & store
-    st.session_state.chat_history.append({"role": "assistant", "content": answer})
+    # Display assistant reply
+    st.session_state.messages.append({"role": "assistant", "content": answer})
     with st.chat_message("assistant"):
-        st.markdown(answer)
+        st.markdown(answer, unsafe_allow_html=False)
