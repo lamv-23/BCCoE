@@ -1,23 +1,22 @@
 import os
 import streamlit as st
-import pdfplumber
+from PyPDF2 import PdfReader
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.vectorstores import DocArrayInMemorySearch
 from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.chat_models import ChatOpenAI
-from langchain.chains.question_answering import load_qa_chain
 from langchain.prompts import PromptTemplate
+from langchain.chains import ConversationalRetrievalChain
 
-# ――― Page config & custom CSS ―――
+# ——————————————————————————————
+# 📄 Page config & CSS to shrink headings
+# ——————————————————————————————
 st.set_page_config(page_title="BCCoE CBA Guide Assistant")
 st.markdown(
     """
     <style>
-      /* shrink headings */
       h1, h2 { font-size: 1.25rem !important; }
-      h3      { font-size: 1.1rem  !important; }
-      /* style the chat input box */
-      .stChatInput > div > div { background-color: #f0f2f6; border-radius: 8px; }
+      h3       { font-size: 1.1rem  !important; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -25,113 +24,139 @@ st.markdown(
 
 st.title("BCCoE CBA Guide Assistant")
 
-# ――― Welcome banner ―――
+# ——————————————————————————————
+# 👋 Welcome banner
+# ——————————————————————————————
 st.markdown(
     """
     <div style="background-color:#333333; color:white; padding:15px; border-radius:8px; margin-bottom:20px">
-      <h4 style="margin:0">👋 Welcome!</h4>
+      <h4 style="margin:0">👋 Welcome to the BCCoE CBA Guide Assistant</h4>
       <p style="margin:5px 0 0">
-        Ask me anything about the Cost–Benefit Analysis Guides and I’ll help you step by step.
+        Ask me anything about cost–benefit analysis guides and I'll help you out.
       </p>
     </div>
     """,
     unsafe_allow_html=True,
 )
 
-# ――― Initialise chat history ―――
+# ——————————————————————————————
+# 💬 Initialise chat history
+# ——————————————————————————————
 if "messages" not in st.session_state:
-    st.session_state.messages = []
+    st.session_state.messages = []  # each message is {"role": "user"/"assistant", "content": text}
 
-# ――― Load API key & vectorstore once ―――
+# ——————————————————————————————
+# 🔑 Load API key & build vector store (once)
+# ——————————————————————————————
 api_key = st.secrets.get("OPENAI_API_KEY", os.environ.get("OPENAI_API_KEY"))
 if not api_key:
-    st.error("🔑 Missing OpenAI API key.")
+    st.error("OpenAI API key is required.")
     st.stop()
 
 if "vectorstore" not in st.session_state:
-    raw_text = ""
+    # 1) Read all PDFs in data/
+    text = ""
     for fn in os.listdir("data"):
         if fn.lower().endswith(".pdf"):
-            path = os.path.join("data", fn)
-            with pdfplumber.open(path) as pdf:
-                for page in pdf.pages:
+            with open(os.path.join("data", fn), "rb") as f:
+                reader = PdfReader(f)
+                for page in reader.pages:
                     txt = page.extract_text()
                     if txt:
-                        raw_text += txt + "\n"
+                        text += txt + "\n"
 
-    # split into chunks
+    # 2) Chunk
     splitter = CharacterTextSplitter(
         separator="\n",
         chunk_size=1000,
         chunk_overlap=200,
         length_function=len
     )
-    chunks = splitter.split_text(raw_text)
+    chunks = splitter.split_text(text)
 
-    # embed & index
+    # 3) Embed & store
     embeddings = OpenAIEmbeddings(openai_api_key=api_key)
     st.session_state.vectorstore = DocArrayInMemorySearch.from_texts(
         chunks, embedding=embeddings
     )
 
-# ――― System prompt & template ―――
-SYSTEM_PROMPT = """You are a friendly, conversational assistant and an expert guide on cost–benefit analysis (CBA).
+# ——————————————————————————————
+# 🧠 Define prompts
+# ——————————————————————————————
+CUSTOM_SYSTEM_PROMPT = """You are a friendly, conversational assistant and an expert guide on cost–benefit analysis (CBA).
 Help users understand and apply the CBA Guides step by step, drawing only on its methodologies and examples.
 If you reference any principle or calculation, cite the relevant section or example from the Guide.
 Aim for clear, concise explanations of at least 3–5 sentences, including worked examples where helpful.
 Structure your answer in Markdown:
 - **# Heading:** to introduce the topic
 - **## Subheadings:** for key steps or concepts
-- **Bullet lists** or **numbered steps** for procedures
+- Bullet lists or numbered steps for procedures
 - **Bold** for definitions, _italics_ for emphasis
 - Code or formula blocks (triple backticks) for numerical examples
 
-If you can’t answer from the Guide, say: “I’m not sure based on the guides — please check the relevant guide or contact a team member.”"""
+If you can’t answer from the Guide, say: “I’m not sure based on the guides—please check the relevant guide or contact a team member.”"""
 
-prompt = PromptTemplate(
+# Used by the “stuff” chain inside the ConversationalRetrievalChain
+qa_prompt = PromptTemplate(
     input_variables=["context", "question"],
-    template=f"""{SYSTEM_PROMPT}
-
-Context:
-{{context}}
-
-Question:
-{{question}}"""
+    template=f"{CUSTOM_SYSTEM_PROMPT}\n\nContext:\n{{context}}\n\nQuestion:\n{{question}}"
 )
 
-# ――― Render chat history ―――
+# Optional: rephrase follow-ups into standalone questions
+condense_prompt = PromptTemplate(
+    input_variables=["chat_history", "question"],
+    template=(
+        "Given the following conversation:\n{chat_history}\n"
+        "Rephrase the last user question so it's standalone:\n\"{question}\""
+    )
+)
+
+# ——————————————————————————————
+# 💬 Render chat history
+# ——————————————————————————————
 for msg in st.session_state.messages:
     role = msg["role"]
     content = msg["content"]
-    with st.chat_message(role):
-        # user: bold name, assistant: raw markdown
-        if role == "user":
-            st.markdown(f"**🧑 You:** {content}")
+    avatar = "user" if role == "user" else "assistant"
+    with st.chat_message(avatar):
+        # render assistant in full Markdown
+        if role == "assistant":
+            st.markdown(content, unsafe_allow_html=False)
         else:
-            st.markdown(content)
+            st.markdown(f"**🧑 You:** {content}")
 
-# ――― New user input ―――
+# ——————————————————————————————
+# ✍️ New user input
+# ——————————————————————————————
 user_input = st.chat_input("Type your question here…")
 if user_input:
-    # record & show
+    # 1) Log & display user
     st.session_state.messages.append({"role": "user", "content": user_input})
     with st.chat_message("user"):
         st.markdown(f"**🧑 You:** {user_input}")
 
-    # generate
+    # 2) Build & run conversational chain
     with st.spinner("Thinking…"):
-        docs = st.session_state.vectorstore.similarity_search(user_input)
         llm = ChatOpenAI(
             model_name="gpt-3.5-turbo-16k",
-            temperature=0.2,  # 0.0 = deterministic, 1.0 = creative
+            temperature=0.2,    # comment: controls randomness; 0.0 = fully deterministic
             top_p=0.9,
             max_tokens=700,
-            openai_api_key=api_key,
+            openai_api_key=api_key
         )
-        chain = load_qa_chain(llm, chain_type="stuff", prompt=prompt)
-        answer = chain.run(input_documents=docs, question=user_input)
+        qa_chain = ConversationalRetrievalChain.from_llm(
+            llm=llm,
+            retriever=st.session_state.vectorstore.as_retriever(),
+            condense_question_prompt=condense_prompt,
+            qa_prompt=qa_prompt,
+        )
+        result = qa_chain({
+            "question": user_input,
+            "chat_history": st.session_state.messages
+        })
+        answer = result["answer"]
 
-    # record & display assistant reply
+    # 3) Log & display assistant
     st.session_state.messages.append({"role": "assistant", "content": answer})
     with st.chat_message("assistant"):
-        st.markdown(answer)
+        st.markdown(answer, unsafe_allow_html=False)
