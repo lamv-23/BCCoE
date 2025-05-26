@@ -89,7 +89,7 @@ if "vectorstore" not in st.session_state:
 
     splitter = CharacterTextSplitter(
         separator="\n",
-        chunk_size=,1000
+        chunk_size=1000,
         chunk_overlap=200,
         length_function=len
     )
