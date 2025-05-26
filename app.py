@@ -1,5 +1,7 @@
 import os
 import streamlit as st
+import pandas as pd
+import pdfplumber
 from PyPDF2 import PdfReader
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.vectorstores import DocArrayInMemorySearch
@@ -13,15 +15,15 @@ from langchain.prompts import PromptTemplate
 # ——————————————————————————————
 st.set_page_config(page_title="BCCoE CBA Guide Assistant")
 
-# Inject CSS to shrink Markdown headings
 st.markdown(
     """
     <style>
-      h1, h2 {
-        font-size: 1.25rem !important;
-      }
-      h3 {
-        font-size: 1.1rem !important;
+      h1, h2 { font-size: 1.25rem !important; }
+      h3     { font-size: 1.1rem  !important; }
+      div[data-testid="stChatInputContainer"] textarea {
+        background-color: #e0f7fa !important;
+        color: #000 !important;
+        border-radius: 4px !important;
       }
     </style>
     """,
@@ -30,11 +32,10 @@ st.markdown(
 
 st.title("BCCoE CBA Guide Assistant")
 
-# Welcome banner with darker background and white text
 st.markdown(
     """
     <div style="background-color:#333333; color:white; padding:15px; border-radius:8px; margin-bottom:20px">
-      <h4 style="margin:0">👋 Welcome to the BCCoE Training Assistant</h4>
+      <h4 style="margin:0">👋 Welcome to the BCCoE CBA Guide Assistant</h4>
       <p style="margin:5px 0 0">
         Ask me anything about developing CBAs and I'll do my best to help.
       </p>
@@ -43,41 +44,79 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# initialise chat history
+# Initialise chat history
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
 # ——————————————————————————————
-# 🔑 Load API key & vector store once
+# 🔑 Load API key
 # ——————————————————————————————
 api_key = st.secrets.get("OPENAI_API_KEY", os.environ.get("OPENAI_API_KEY"))
 if not api_key:
     st.error("OpenAI API key is required.")
     st.stop()
 
-if "vectorstore" not in st.session_state:
-    text = ""
-    for fn in os.listdir("data"):
-        if fn.lower().endswith(".pdf"):
-            with open(os.path.join("data", fn), "rb") as f:
-                reader = PdfReader(f)
-                for page in reader.pages:
-                    txt = page.extract_text()
-                    if txt:
-                        text += txt + "\n"
+# ——————————————————————————————
+# 🚀 Build & cache the vectorstore and extract tables once
+# ——————————————————————————————
+@st.cache_resource
+def init_store_and_tables(api_key: str):
+    # 1) Read & combine all PDF text
+    all_text = ""
+    pdf_tables: dict[str, list[pd.DataFrame]] = {}
 
+    for fn in sorted(os.listdir("data")):
+        if not fn.lower().endswith(".pdf"):
+            continue
+        path = os.path.join("data", fn)
+
+        # — Extract text for embedding
+        reader = PdfReader(path)
+        for page in reader.pages:
+            txt = page.extract_text() or ""
+            all_text += txt + "\n"
+
+        # — Extract tables via pdfplumber
+        tables = []
+        with pdfplumber.open(path) as pdf:
+            for page in pdf.pages:
+                for tbl in page.extract_tables():
+                    # first row as header
+                    if not tbl or len(tbl) < 2:
+                        continue
+                    df = pd.DataFrame(tbl[1:], columns=tbl[0])
+                    tables.append(df)
+        pdf_tables[fn] = tables
+
+    # 2) Split text into chunks
     splitter = CharacterTextSplitter(
         separator="\n",
         chunk_size=3500,
         chunk_overlap=100,
         length_function=len
     )
-    chunks = splitter.split_text(text)
+    chunks = splitter.split_text(all_text)
 
+    # 3) Embed & build vectorstore
     embeddings = OpenAIEmbeddings(openai_api_key=api_key)
-    st.session_state.vectorstore = DocArrayInMemorySearch.from_texts(
-        chunks, embedding=embeddings
-    )
+    vectorstore = DocArrayInMemorySearch.from_texts(chunks, embedding=embeddings)
+
+    return vectorstore, pdf_tables
+
+vectorstore, pdf_tables = init_store_and_tables(api_key)
+
+# ——————————————————————————————
+# 📊 Display any extracted tables
+# ——————————————————————————————
+if any(pdf_tables.values()):
+    st.subheader("📋 Extracted Tables")
+    for fn, tables in pdf_tables.items():
+        if not tables:
+            continue
+        with st.expander(f"Tables found in {fn}"):
+            for i, df in enumerate(tables, start=1):
+                st.write(f"**Table {i}:**")
+                st.dataframe(df, use_container_width=True)
 
 # ——————————————————————————————
 # 🧠 Define custom prompt for detail & Markdown
@@ -91,9 +130,9 @@ Structure your answer in Markdown:
 - **## Subheadings:** for key steps or concepts  
 - **Bullet lists** or **numbered steps** for procedures  
 - **Bold** for definitions, _italics_ for emphasis  
-# Code or formula blocks (triple backticks) for numerical examples  
+- Code or formula blocks (triple backticks) for numerical examples  
 
-If you can’t answer from the Guide, say: “I’m not sure based on the guides —please check the relevant guide or contact a team member.”'''
+If you can’t answer from the Guide, say: “I’m not sure based on the guides — please check the relevant guide or contact a team member.”'''
 
 prompt = PromptTemplate(
     input_variables=["context", "question"],
@@ -107,19 +146,17 @@ Question:
 )
 
 # ——————————————————————————————
-# 💬 Render chat history with styled bubbles
+# 💬 Render chat history
 # ——————————————————————————————
 for msg in st.session_state.messages:
-    if msg["role"] == "user":
-        with st.chat_message("user"):
-            st.markdown(f"**🧑 You:** {msg['content']}")
-    else:
-        # render assistant's full Markdown response
-        with st.chat_message("assistant"):
+    with st.chat_message(msg["role"]):
+        if msg["role"] == "assistant":
             st.markdown(msg["content"], unsafe_allow_html=False)
+        else:
+            st.markdown(f"**🧑 You:** {msg['content']}")
 
 # ——————————————————————————————
-# ✍️ New user input
+# ✍️ Handle new user input
 # ——————————————————————————————
 user_input = st.chat_input("Type your question here…")
 if user_input:
@@ -130,19 +167,15 @@ if user_input:
 
     # process and generate response
     with st.spinner("Thinking…"):
-        docs = st.session_state.vectorstore.similarity_search(user_input)
+        docs = vectorstore.similarity_search(user_input)
         llm = ChatOpenAI(
             model_name="gpt-3.5-turbo-16k",
-            temperature=0.2, # controls randomness/creativity: 0.0 = fully deterministic, 1.0 = very creative (higher = more varied responses)
+            temperature=0.2,  # controls randomness/creativity: 0.0 = deterministic, 1.0 = very creative
             top_p=0.9,
             max_tokens=700,
             openai_api_key=api_key
         )
-        chain = load_qa_chain(
-            llm,
-            chain_type="stuff",
-            prompt=prompt
-        )
+        chain = load_qa_chain(llm, chain_type="stuff", prompt=prompt)
         answer = chain.run(input_documents=docs, question=user_input)
 
     # record & display assistant reply
