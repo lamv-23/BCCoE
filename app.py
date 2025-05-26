@@ -7,7 +7,6 @@ from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.chat_models import ChatOpenAI
 from langchain.prompts import PromptTemplate
 from langchain.chains import ConversationalRetrievalChain
-from langchain.vectorstores import DocArrayInMemorySearch
 
 # ——————————————————————————————
 # 📄 Page config & CSS to shrink headings
