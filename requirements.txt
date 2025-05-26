@@ -1,6 +1,7 @@
 streamlit==1.31.0
-openai==0.27.8
+PyPDF2==3.0.1
 langchain[docarray]==0.0.320
+openai==0.27.8
 tiktoken==0.5.2
 tenacity>=8.0.0
 pdfplumber
