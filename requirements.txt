@@ -6,3 +6,4 @@ langchain==0.0.320
 openai==0.27.8
 faiss-cpu==1.7.4
 tiktoken==0.5.2
+docarray==0.32.0
