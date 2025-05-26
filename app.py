@@ -15,7 +15,7 @@ st.set_page_config(page_title="BCCoE CBA Guide Assistant")
 st.markdown("""
     <style>
       h1, h2 {font-size:1.25rem !important;}
-      h3     {font-size:1.1rem  !important;}
+      h3   {font-size:1.1rem  !important;}
       /* style the user input box */
       .stTextInput > div > div > input {
         background-color: #f0f0f5;
@@ -36,6 +36,14 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ——————————————————————————————
+# 🔄 Clear chat button
+# ——————————————————————————————
+if st.button("🔄 Clear Chat History"):
+    st.session_state.messages = []
+    # rerun so the cleared chat is immediately reflected
+    st.experimental_rerun()
+
+# ——————————————————————————————
 # 💬 Initialise chat history
 # ——————————————————————————————
 if "messages" not in st.session_state:
@@ -46,19 +54,38 @@ if "messages" not in st.session_state:
 # ——————————————————————————————
 api_key = st.secrets.get("OPENAI_API_KEY", os.environ.get("OPENAI_API_KEY"))
 if not api_key:
-    st.error("🔑 Please provide your OpenAI API key in Streamlit secrets or as OPENAI_API_KEY.")
+    st.error("🔑 Please provide your OpenAI API key in Streamlit secrets or as OPENAI_API_KEY environment variable.")
     st.stop()
 
 if "vectorstore" not in st.session_state:
     full_text = ""
-    for fn in os.listdir("data"):
+    data_dir = "data" # Define data directory
+    if not os.path.exists(data_dir):
+        st.error(f"Data directory '{data_dir}' not found. Please ensure your PDF files are in a folder named 'data'.")
+        st.stop()
+
+    pdf_found = False
+    for fn in os.listdir(data_dir):
         if fn.lower().endswith(".pdf"):
-            path = os.path.join("data", fn)
-            with pdfplumber.open(path) as pdf:
-                for page in pdf.pages:
-                    txt = page.extract_text()
-                    if txt:
-                        full_text += txt + "\n"
+            pdf_found = True
+            path = os.path.join(data_dir, fn)
+            try:
+                with pdfplumber.open(path) as pdf:
+                    for page in pdf.pages:
+                        txt = page.extract_text()
+                        if txt:
+                            full_text += txt + "\n"
+            except Exception as e:
+                st.warning(f"Could not read PDF file {fn}: {e}")
+                continue
+
+    if not pdf_found:
+        st.error(f"No PDF files found in '{data_dir}'. Please upload your CBA guide PDFs to this directory.")
+        st.stop()
+    if not full_text:
+        st.error("Could not extract any text from the provided PDF files. Please check the PDFs for text content.")
+        st.stop()
+
 
     splitter = CharacterTextSplitter(
         separator="\n",
@@ -68,33 +95,47 @@ if "vectorstore" not in st.session_state:
     )
     chunks = splitter.split_text(full_text)
 
+    # Handle cases where no chunks are generated
+    if not chunks:
+        st.error("No text chunks could be generated from the PDF content. This might indicate issues with text extraction or very short documents.")
+        st.stop()
+
     embeddings = OpenAIEmbeddings(openai_api_key=api_key)
-    st.session_state.vectorstore = FAISS.from_texts(chunks, embeddings)
+    try:
+        st.session_state.vectorstore = FAISS.from_texts(chunks, embeddings)
+    except Exception as e:
+        st.error(f"Failed to create FAISS vectorstore. Please check your OpenAI API key and the content of your PDFs. Error: {e}")
+        st.stop()
+
 
 # ——————————————————————————————
 # 🧠 Prompt & LLMChain setup
 # ——————————————————————————————
-SYSTEM_PROMPT = """You are a friendly, conversational assistant and expert in cost–benefit analysis (CBA).  
-Help users apply the CBA guides step by step, drawing only on those methodologies and examples.  
-If you reference any principle or calculation, cite the relevant section or example.  
-Aim for clear explanations of 3–5 sentences, with worked examples where helpful.  
+SYSTEM_PROMPT = """You are a friendly, conversational assistant and expert in cost–benefit analysis (CBA).
+Help users apply the CBA guides step by step, drawing only on those methodologies and examples.
+If you reference any principle or calculation, cite the relevant section or example.
+Aim for clear explanations of 3–5 sentences, with worked examples where helpful.
+If the user asks for numerical values, comparisons, or data that can be presented tabularly,
+please format your response as a Markdown table.
 Structure your answer in Markdown:
-- **# Heading:** introduce the topic  
-- **## Subheadings:** for key steps  
-- **Bullet** or **numbered** lists for procedures  
-- **Bold** for definitions, _italics_ for emphasis  
-- ```formula``` blocks for numerical examples  
+- **# Heading:** introduce the topic
+- **## Subheadings:** for key steps
+- **Bullet** or **numbered** lists for procedures
+- **Bold** for definitions, _italics_ for emphasis
+- ```formula``` blocks for numerical examples
 
-If you can’t answer, say: “I’m not sure—please check the guide or contact a team member.”"""
+If you can’t answer, say: “I’m not sure—please check the guide or contact a team member.”
+"""
 
+# The prompt now includes chat_history
 prompt = PromptTemplate(
-    input_variables=["context", "question"],
-    template=f"{SYSTEM_PROMPT}\n\nContext:\n{{context}}\n\nQuestion:\n{{question}}"
+    input_variables=["context", "question", "chat_history"],
+    template=f"{SYSTEM_PROMPT}\n\nChat History:\n{{chat_history}}\n\nContext:\n{{context}}\n\nQuestion:\n{{question}}"
 )
 
 llm = ChatOpenAI(
     model_name="gpt-3.5-turbo-16k",
-    temperature=0.2,   # controls randomness; 0.0 = deterministic, 1.0 = very creative
+    temperature=0.2,    # comment: controls randomness; 0.0 = deterministic
     top_p=0.9,
     max_tokens=700,
     openai_api_key=api_key
@@ -107,29 +148,43 @@ chain = LLMChain(llm=llm, prompt=prompt)
 for msg in st.session_state.messages:
     avatar = "user" if msg["role"] == "user" else "assistant"
     with st.chat_message(avatar):
-        # user messages get a prefix
         if msg["role"] == "user":
             st.markdown(f"**🧑 You:** {msg['content']}")
         else:
-            st.markdown(msg["content"], unsafe_allow_html=False)
+            st.markdown(msg["content"], unsafe_allow_html=False) # Keep unsafe_allow_html=False if you want to prevent arbitrary HTML from LLM
 
 # ——————————————————————————————
 # ✍️ Accept user question
 # ——————————————————————————————
 user_q = st.chat_input("Type your question here…")
 if user_q:
-    # log & show
+    # log & show user message
     st.session_state.messages.append({"role": "user", "content": user_q})
     with st.chat_message("user"):
         st.markdown(f"**🧑 You:** {user_q}")
 
+    # Prepare chat history for the LLM
+    # We only include previous user/assistant messages, excluding the current user question
+    formatted_chat_history = ""
+    for msg in st.session_state.messages[:-1]: # Exclude the very last message (the current user_q)
+        if msg["role"] == "user":
+            formatted_chat_history += f"User: {msg['content']}\n"
+        else:
+            formatted_chat_history += f"Assistant: {msg['content']}\n"
+
     # retrieve & answer
     with st.spinner("Thinking…"):
-        docs = st.session_state.vectorstore.similarity_search(user_q, k=5)
+        docs = st.session_state.vectorstore.similarity_search(user_q, k=5) # k=5 is a good starting point
         context = "\n\n".join(d.page_content for d in docs)
-        answer = chain.run(context=context, question=user_q)
 
-    # log & display assistant
+        try:
+            answer = chain.run(context=context, question=user_q, chat_history=formatted_chat_history)
+        except Exception as e:
+            answer = f"I apologize, but I encountered an error while processing your request: {e}. Please try again or rephrase your question."
+            st.error(answer)
+
+
+    # log & display assistant message
     st.session_state.messages.append({"role": "assistant", "content": answer})
     with st.chat_message("assistant"):
-        st.markdown(answer, unsafe_allow_html=False)
+        st.markdown(answer, unsafe_allow_html=False) # Keep unsafe_allow_html=False for security reasons
