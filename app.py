@@ -169,7 +169,7 @@ if user_q:
 
     # retrieve & answer
     with st.spinner("Thinking…"):
-        docs = st.session_state.vectorstore.similarity_search(user_q, k=5) # k=5 is a good starting point
+        docs = st.session_state.vectorstore.similarity_search(user_q, k=7) # k=5 is a good starting point
         context = "\n\n".join(d.page_content for d in docs)
 
         try:
