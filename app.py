@@ -80,14 +80,11 @@ def init_store_and_tables(api_key: str):
                     header_counts: dict[str,int] = {}
                     clean_header: list[str] = []
                     for col in raw_header:
-                        # default name for missing headers
                         name = col.strip() if isinstance(col, str) and col.strip() else "column"
-                        # de-duplicate
                         count = header_counts.get(name, 0)
                         header_counts[name] = count + 1
                         if count:
                             name = f"{name}_{count}"
-                        # snake_case & lowercase
                         name = re.sub(r"\W+", "_", name).lower()
                         clean_header.append(name)
                     df = pd.DataFrame(raw_tbl[1:], columns=clean_header)
@@ -123,19 +120,6 @@ if not api_key:
     st.stop()
 
 vectorstore, pdf_tables = init_store_and_tables(api_key)
-
-# ——————————————————————————————
-# 📋 Show extracted tables
-# ——————————————————————————————
-if any(pdf_tables.values()):
-    st.subheader("Extracted Tables")
-    for fn, tables in pdf_tables.items():
-        if not tables:
-            continue
-        with st.expander(f"Tables in {fn}"):
-            for i, df in enumerate(tables, start=1):
-                st.write(f"**Table {i}:**")
-                st.dataframe(df, use_container_width=True)
 
 # ——————————————————————————————
 # 🧠 System prompt & PromptTemplate
@@ -186,15 +170,11 @@ if user_input:
         st.markdown(f"**🧑 You:** {user_input}")
 
     with st.spinner("Thinking…"):
-        # retrieve top‐5 chunks
+        # retrieve top‑5 chunks
         docs = vectorstore.similarity_search(user_input, k=5)
+        contexts = [d.page_content for d in docs]
+        sources  = [d.metadata.get("source","unknown") for d in docs]
 
-        # build a combined context string that injects the source name
-        contexts, sources = [], []
-        for d in docs:
-            contexts.append(d.page_content)
-            sources.append(d.metadata.get("source", "unknown"))
-        # for simplicity, send only the first source in prompt; chain will have all contexts
         chain_input = {
             "context": "\n\n".join(contexts),
             "question": user_input,
@@ -211,6 +191,23 @@ if user_input:
         chain = load_qa_chain(llm, chain_type="stuff", prompt=prompt)
         answer = chain.run(**chain_input)
 
+    # record & display assistant reply
     st.session_state.messages.append({"role": "assistant", "content": answer})
     with st.chat_message("assistant"):
         st.markdown(answer, unsafe_allow_html=False)
+
+    # only show tables when question mentions "table"
+    if "table" in user_input.lower():
+        st.subheader("Related Tables from Guides")
+        shown = set()
+        for src in sources:
+            if src in shown:
+                continue
+            shown.add(src)
+            tables = pdf_tables.get(src, [])
+            if not tables:
+                continue
+            with st.expander(f"Tables in {src}"):
+                for i, df in enumerate(tables, start=1):
+                    st.write(f"**Table {i}:**")
+                    st.dataframe(df, use_container_width=True)
