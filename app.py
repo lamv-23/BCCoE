@@ -111,7 +111,7 @@ if "vectorstore" not in st.session_state:
 # ——————————————————————————————
 # 🧠 Prompt & LLMChain setup
 # ——————————————————————————————
-SYSTEM_PROMPT = """You are a friendly, conversational assistant and expert in cost–benefit analysis (CBA).
+SYSTEM_PROMPT = """You are a friendly, conversational assistant and expert in cost–benefit analysis (CBA). Only use the content in the pdfs to form answers.
 Help users apply the CBA guides step by step, drawing only on those methodologies and examples.
 If you reference any principle or calculation, cite the relevant section or example.
 Aim for clear explanations of 3–5 sentences, with worked examples where helpful.
