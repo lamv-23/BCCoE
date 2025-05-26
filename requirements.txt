@@ -1,10 +1,9 @@
 streamlit==1.31.0
-PyPDF2==3.0.1
+pdfplumber
 langchain==0.0.320
 docarray==0.32.0
 pydantic==1.10.13
 openai==0.27.8
 backoff==2.2.1
-tiktoken>=0.5.2,<0.6.0
-pdfplumber>=0.9.0
-pandas>=1.3.0,<3.0
+tiktoken==0.5.2
+pandas
