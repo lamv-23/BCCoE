@@ -9,15 +9,17 @@ from langchain.prompts import PromptTemplate
 from langchain.chains import ConversationalRetrievalChain
 
 # ——————————————————————————————
-# 📄 Page config & CSS to shrink headings
+# 📄 Page config & CSS tweaks
 # ——————————————————————————————
 st.set_page_config(page_title="BCCoE CBA Guide Assistant")
 st.markdown(
     """
     <style>
+      /* shrink H1/H2/H3 */
       h1, h2 { font-size: 1.25rem !important; }
       h3    { font-size: 1.1rem  !important; }
-      /* Style the chat input box */
+
+      /* style chat input box */
       .stChatInput textarea {
         background-color: #f0f0f0 !important;
         border-radius: 8px !important;
@@ -48,10 +50,10 @@ st.markdown(
 # 💬 Initialise chat history
 # ——————————————————————————————
 if "messages" not in st.session_state:
-    st.session_state.messages = []  # each message is {"role": "user"/"assistant", "content": text}
+    st.session_state.messages = []  # each item: {"role": "user"/"assistant", "content": text}
 
 # ——————————————————————————————
-# 🔑 Load API key & build vector store (once)
+# 🔑 Load API key & build FAISS vector store (once)
 # ——————————————————————————————
 api_key = st.secrets.get("OPENAI_API_KEY", os.environ.get("OPENAI_API_KEY"))
 if not api_key:
@@ -70,7 +72,7 @@ if "vectorstore" not in st.session_state:
                     if txt:
                         text += txt + "\n"
 
-    # 2) Chunk
+    # 2) Chunk into ~1k-character pieces
     splitter = CharacterTextSplitter(
         separator="\n",
         chunk_size=1000,
@@ -79,17 +81,14 @@ if "vectorstore" not in st.session_state:
     )
     chunks = splitter.split_text(text)
 
-    # 3) Embed & store with FAISS (no docarray needed)
+    # 3) Embed & FAISS index
     embeddings = OpenAIEmbeddings(openai_api_key=api_key)
-    st.session_state.vectorstore = FAISS.from_texts(
-        texts=chunks,
-        embedding=embeddings
-    )
+    st.session_state.vectorstore = FAISS.from_texts(chunks, embeddings)
 
 # ——————————————————————————————
-# 🧠 Define prompts
+# 🧠 Define your system + QA prompts
 # ——————————————————————————————
-CUSTOM_SYSTEM_PROMPT = """You are a friendly, conversational assistant and an expert guide on cost–benefit analysis (CBA).
+SYSTEM = """You are a friendly, conversational assistant and an expert guide on cost–benefit analysis (CBA).
 Help users understand and apply the CBA Guides step by step, drawing only on its methodologies and examples.
 If you reference any principle or calculation, cite the relevant section or example from the Guide.
 Aim for clear, concise explanations of at least 3–5 sentences, including worked examples where helpful.
@@ -103,13 +102,11 @@ Structure your answer in Markdown:
 If you can’t answer from the Guide, say:
 “I’m not sure based on the guides—please check the relevant guide or contact a team member.”"""
 
-# Used by the “stuff” chain inside the ConversationalRetrievalChain
 qa_prompt = PromptTemplate(
     input_variables=["context", "question"],
-    template=f"{CUSTOM_SYSTEM_PROMPT}\n\nContext:\n{{context}}\n\nQuestion:\n{{question}}"
+    template=f"{SYSTEM}\n\nContext:\n{{context}}\n\nQuestion:\n{{question}}"
 )
 
-# Optional: rephrase follow-ups into standalone questions
 condense_prompt = PromptTemplate(
     input_variables=["chat_history", "question"],
     template=(
@@ -119,33 +116,31 @@ condense_prompt = PromptTemplate(
 )
 
 # ——————————————————————————————
-# 💬 Render chat history
+# 💬 Render existing chat messages
 # ——————————————————————————————
 for msg in st.session_state.messages:
-    role = msg["role"]
-    content = msg["content"]
-    avatar = "user" if role == "user" else "assistant"
+    avatar = "user" if msg["role"] == "user" else "assistant"
     with st.chat_message(avatar):
-        if role == "assistant":
-            st.markdown(content, unsafe_allow_html=False)
+        if msg["role"] == "assistant":
+            st.markdown(msg["content"], unsafe_allow_html=False)
         else:
-            st.markdown(f"**🧑 You:** {content}")
+            st.markdown(f"**🧑 You:** {msg['content']}")
 
 # ——————————————————————————————
-# ✍️ New user input
+# ✍️ Handle new user input
 # ——————————————————————————————
 user_input = st.chat_input("Type your question here…")
 if user_input:
-    # 1) Log & display user
+    # 1) Log & display the user question
     st.session_state.messages.append({"role": "user", "content": user_input})
     with st.chat_message("user"):
         st.markdown(f"**🧑 You:** {user_input}")
 
-    # 2) Build & run conversational chain
+    # 2) Build & run the conversational chain
     with st.spinner("Thinking…"):
         llm = ChatOpenAI(
             model_name="gpt-3.5-turbo-16k",
-            temperature=0.2,    # controls randomness; 0.0 = deterministic
+            temperature=0.2,    # controls randomness: 0.0 = deterministic
             top_p=0.9,
             max_tokens=700,
             openai_api_key=api_key
@@ -154,7 +149,8 @@ if user_input:
             llm=llm,
             retriever=st.session_state.vectorstore.as_retriever(),
             condense_question_prompt=condense_prompt,
-            qa_prompt=qa_prompt,
+            chain_type="stuff",
+            chain_type_kwargs={"prompt": qa_prompt},
         )
         result = qa_chain({
             "question": user_input,
@@ -162,7 +158,7 @@ if user_input:
         })
         answer = result["answer"]
 
-    # 3) Log & display assistant
+    # 3) Log & display the assistant reply
     st.session_state.messages.append({"role": "assistant", "content": answer})
     with st.chat_message("assistant"):
         st.markdown(answer, unsafe_allow_html=False)
