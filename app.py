@@ -135,7 +135,7 @@ prompt = PromptTemplate(
 
 llm = ChatOpenAI(
     model_name="gpt-3.5-turbo-16k",
-    temperature=0.2,    # comment: controls randomness; 0.0 = deterministic
+    temperature=0.3,    # comment: controls randomness; 0.0 = deterministic
     top_p=0.9,
     max_tokens=700,
     openai_api_key=api_key
