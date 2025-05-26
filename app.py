@@ -2,7 +2,7 @@ import os
 import streamlit as st
 from PyPDF2 import PdfReader
 from langchain.text_splitter import CharacterTextSplitter
-from langchain.vectorstores import DocArrayInMemorySearch
+from langchain.vectorstores import FAISS
 from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.chat_models import ChatOpenAI
 from langchain.prompts import PromptTemplate
@@ -16,7 +16,12 @@ st.markdown(
     """
     <style>
       h1, h2 { font-size: 1.25rem !important; }
-      h3       { font-size: 1.1rem  !important; }
+      h3    { font-size: 1.1rem  !important; }
+      /* Style the chat input box */
+      .stChatInput textarea {
+        background-color: #f0f0f0 !important;
+        border-radius: 8px !important;
+      }
     </style>
     """,
     unsafe_allow_html=True,
@@ -74,10 +79,11 @@ if "vectorstore" not in st.session_state:
     )
     chunks = splitter.split_text(text)
 
-    # 3) Embed & store
+    # 3) Embed & store with FAISS (no docarray needed)
     embeddings = OpenAIEmbeddings(openai_api_key=api_key)
-    st.session_state.vectorstore = DocArrayInMemorySearch.from_texts(
-        chunks, embedding=embeddings
+    st.session_state.vectorstore = FAISS.from_texts(
+        texts=chunks,
+        embedding=embeddings
     )
 
 # ——————————————————————————————
@@ -94,7 +100,8 @@ Structure your answer in Markdown:
 - **Bold** for definitions, _italics_ for emphasis
 - Code or formula blocks (triple backticks) for numerical examples
 
-If you can’t answer from the Guide, say: “I’m not sure based on the guides—please check the relevant guide or contact a team member.”"""
+If you can’t answer from the Guide, say:
+“I’m not sure based on the guides—please check the relevant guide or contact a team member.”"""
 
 # Used by the “stuff” chain inside the ConversationalRetrievalChain
 qa_prompt = PromptTemplate(
@@ -119,7 +126,6 @@ for msg in st.session_state.messages:
     content = msg["content"]
     avatar = "user" if role == "user" else "assistant"
     with st.chat_message(avatar):
-        # render assistant in full Markdown
         if role == "assistant":
             st.markdown(content, unsafe_allow_html=False)
         else:
@@ -139,7 +145,7 @@ if user_input:
     with st.spinner("Thinking…"):
         llm = ChatOpenAI(
             model_name="gpt-3.5-turbo-16k",
-            temperature=0.2,    # comment: controls randomness; 0.0 = fully deterministic
+            temperature=0.2,    # controls randomness; 0.0 = deterministic
             top_p=0.9,
             max_tokens=700,
             openai_api_key=api_key
