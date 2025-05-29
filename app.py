@@ -3,9 +3,8 @@ import streamlit as st
 import pdfplumber
 import re
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.vectorstores import FAISS
-from langchain.embeddings.openai import OpenAIEmbeddings
-from langchain.chat_models import ChatOpenAI
+from langchain_community.vectorstores import FAISS
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain.prompts import PromptTemplate
 from langchain.chains import LLMChain
 
@@ -170,7 +169,12 @@ vectorstore, total_chunks = build_vectorstore()
 SYSTEM_PROMPT = """
 You are an expert Cost-Benefit Analysis (CBA) consultant and teacher with deep knowledge of government CBA guidelines and best practices.
 
-INSTRUCTIONS:
+INTERACTION GUIDELINES:
+- For casual greetings (like "Hi", "Hello"), respond warmly and briefly introduce what you can help with
+- For general conversation, be friendly and natural
+- For CBA-specific questions, provide detailed, expert guidance based on the provided documents
+
+CBA ANALYSIS INSTRUCTIONS (when relevant):
 1. **Always prioritize the provided PDF context** - Base your answers primarily on the information from the CBA guide documents
 2. **Be specific and detailed** - When referencing numbers, parameters, tables, or formulas, present them clearly with proper formatting
 3. **Cite your sources** - When possible, reference which document or section your information comes from
@@ -179,13 +183,13 @@ INSTRUCTIONS:
 6. **Provide practical guidance** - Add brief explanations to help users understand and apply the material
 7. **Consider context** - Use the chat history to provide consistent, connected responses
 
-RESPONSE FORMAT:
+RESPONSE FORMAT FOR CBA QUESTIONS:
 - Use clear headings and subheadings
 - Present numerical data in tables or organized lists
 - Include specific page references when available
 - Provide actionable guidance where appropriate
 
-If the answer cannot be found in the provided documents, respond with: "I couldn't find this specific information in the provided CBA guides. However, [provide any relevant general guidance if appropriate]."
+If a CBA answer cannot be found in the provided documents, respond with: "I couldn't find this specific information in the provided CBA guides. However, [provide any relevant general guidance if appropriate]."
 """
 
 # Enhanced prompt with better structure
@@ -228,6 +232,70 @@ def expand_query(query):
         return f"{query} {' '.join(expanded_terms[:3])}"  # Add max 3 related terms
     return query
 
+def is_casual_greeting(text):
+    """Check if the message is a casual greeting or small talk"""
+    casual_patterns = [
+        'hi', 'hello', 'hey', 'good morning', 'good afternoon', 'good evening',
+        'how are you', 'what\'s up', 'sup', 'greetings', 'yo'
+    ]
+    text_lower = text.lower().strip()
+    
+    # Check if it's a short greeting (under 20 characters and matches patterns)
+    if len(text_lower) < 20:
+        for pattern in casual_patterns:
+            if pattern in text_lower:
+                return True
+    return False
+
+def handle_casual_greeting():
+    """Generate a friendly greeting response"""
+    return """Hi there! 👋 
+
+I'm your CBA Guide Assistant, here to help you with cost-benefit analysis questions. I have access to comprehensive CBA guidelines and can help you with:
+
+• Understanding CBA methodology and principles
+• Calculating NPV, discount rates, and other metrics  
+• Identifying and valuing costs and benefits
+• Conducting sensitivity and risk analysis
+• Following best practices for government CBAs
+
+Feel free to ask me any specific questions about cost-benefit analysis, or try one of the sample questions in the sidebar to get started!"""
+    """Enhanced retrieval with multiple search strategies"""
+    all_docs = []
+    
+    # Strategy 1: Direct similarity search
+    primary_docs = vectorstore.similarity_search(query, k=12)
+    all_docs.extend(primary_docs)
+    
+    # Strategy 2: Expanded query search if we need more results
+    if len(primary_docs) < 8:
+        expanded_query = expand_query(query)
+        if expanded_query != query:
+            expanded_docs = vectorstore.similarity_search(expanded_query, k=6)
+            all_docs.extend(expanded_docs)
+    
+    # Strategy 3: Keyword-based search for important terms
+    important_terms = []
+    query_words = query.lower().split()
+    for word in query_words:
+        if len(word) > 4 and word not in ['what', 'how', 'when', 'where', 'should', 'would', 'could']:
+            important_terms.append(word)
+    
+    # Search for key terms if we still need more context
+    if len(all_docs) < 10 and important_terms:
+        for term in important_terms[:2]:  # Limit to top 2 terms
+            term_docs = vectorstore.similarity_search(term, k=4)
+            all_docs.extend(term_docs)
+    
+    # Remove duplicates while preserving order and relevance
+    seen = set()
+    unique_docs = []
+    for doc in all_docs:
+        doc_hash = hash(doc.page_content)
+        if doc_hash not in seen and len(unique_docs) < max_chunks:
+            seen.add(doc_hash)
+            unique_docs.append(doc)
+    
 def get_relevant_context(vectorstore, query, max_chunks=20):
     """Enhanced retrieval with multiple search strategies"""
     all_docs = []
@@ -331,54 +399,58 @@ if user_q:
         else:
             formatted_chat_history += f"Assistant: {msg['content'][:200]}...\n"  # Truncate long responses
 
-    # Enhanced retrieval with multiple search strategies
-    with st.spinner("🔍 Searching through CBA guides and analyzing context…"):
-        try:
-            # Get relevant documents using enhanced retrieval
-            docs = get_relevant_context(vectorstore, user_q, max_chunks=max_chunks)
-            
-            if not docs:
-                st.warning("⚠️ No relevant content found. Try rephrasing your question or using different keywords.")
-                answer = "I couldn't find relevant information in the CBA guides for your question. Could you try rephrasing it or asking about a more specific aspect of cost-benefit analysis?"
-            else:
-                # Prepare context with clear separation
-                context_parts = []
-                for i, doc in enumerate(docs, 1):
-                    context_parts.append(f"--- Context Chunk {i} ---\n{doc.page_content}")
+    # Check if it's a casual greeting first
+    if is_casual_greeting(user_q):
+        answer = handle_casual_greeting()
+    else:
+        # Enhanced retrieval with multiple search strategies
+        with st.spinner("🔍 Searching through CBA guides and analyzing context…"):
+            try:
+                # Get relevant documents using enhanced retrieval
+                docs = get_relevant_context(vectorstore, user_q, max_chunks=max_chunks)
                 
-                context = "\n\n".join(context_parts)
-                
-                # Show retrieval info in sidebar if debug mode is on
-                if st.sidebar.checkbox("🔍 Show Retrieval Info"):
-                    st.sidebar.write(f"Retrieved {len(docs)} relevant chunks")
-                    st.sidebar.text_area("Preview of first chunk:", docs[0].page_content[:300] + "..." if docs else "No chunks")
-
-                # Generate answer
-                with st.spinner("🤖 Generating detailed response…"):
-                    answer = chain.run(
-                        context=context, 
-                        question=user_q, 
-                        chat_history=formatted_chat_history
-                    )
+                if not docs:
+                    st.warning("⚠️ No relevant content found. Try rephrasing your question or using different keywords.")
+                    answer = "I couldn't find relevant information in the CBA guides for your question. Could you try rephrasing it or asking about a more specific aspect of cost-benefit analysis?"
+                else:
+                    # Prepare context with clear separation
+                    context_parts = []
+                    for i, doc in enumerate(docs, 1):
+                        context_parts.append(f"--- Context Chunk {i} ---\n{doc.page_content}")
                     
-                    # Post-process answer to ensure it's helpful
-                    if len(answer.strip()) < 50 or "I don't know" in answer or "I couldn't find" in answer:
-                        # Try a more direct approach
-                        direct_prompt = f"""
-                        Based on the provided CBA guide context, please answer this question as specifically as possible: {user_q}
-                        
-                        Even if you're not completely certain, provide your best interpretation based on the available information.
-                        If truly no relevant information exists, suggest related topics that might help the user.
-                        """
+                    context = "\n\n".join(context_parts)
+                    
+                    # Show retrieval info in sidebar if debug mode is on
+                    if st.sidebar.checkbox("🔍 Show Retrieval Info"):
+                        st.sidebar.write(f"Retrieved {len(docs)} relevant chunks")
+                        st.sidebar.text_area("Preview of first chunk:", docs[0].page_content[:300] + "..." if docs else "No chunks")
+
+                    # Generate answer
+                    with st.spinner("🤖 Generating detailed response…"):
                         answer = chain.run(
-                            context=context,
-                            question=direct_prompt,
-                            chat_history=""
+                            context=context, 
+                            question=user_q, 
+                            chat_history=formatted_chat_history
                         )
-            
-        except Exception as e:
-            answer = f"I apologize, but I encountered an error while processing your request: {str(e)}. Please try again or rephrase your question."
-            st.error(f"Error details: {e}")
+                        
+                        # Post-process answer to ensure it's helpful
+                        if len(answer.strip()) < 50 or "I don't know" in answer or "I couldn't find" in answer:
+                            # Try a more direct approach
+                            direct_prompt = f"""
+                            Based on the provided CBA guide context, please answer this question as specifically as possible: {user_q}
+                            
+                            Even if you're not completely certain, provide your best interpretation based on the available information.
+                            If truly no relevant information exists, suggest related topics that might help the user.
+                            """
+                            answer = chain.run(
+                                context=context,
+                                question=direct_prompt,
+                                chat_history=""
+                            )
+                
+            except Exception as e:
+                answer = f"I apologize, but I encountered an error while processing your request: {str(e)}. Please try again or rephrase your question."
+                st.error(f"Error details: {e}")
 
     # Log & display assistant message
     st.session_state.messages.append({"role": "assistant", "content": answer})
