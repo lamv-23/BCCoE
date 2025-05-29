@@ -194,13 +194,13 @@ prompt = PromptTemplate(
     template=f"""{SYSTEM_PROMPT}
 
 PREVIOUS CONVERSATION:
-{{{chat_history}}}
+{{chat_history}}
 
 RELEVANT CONTEXT FROM CBA GUIDES:
-{{{context}}}
+{{context}}
 
 CURRENT QUESTION:
-{{{question}}}
+{{question}}
 
 RESPONSE:"""
 )
