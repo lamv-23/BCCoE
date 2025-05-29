@@ -110,8 +110,6 @@ def build_vectorstore():
     if not extractable_pdfs:
         st.error("❌ No extractable text found in any PDF files. Please ensure your PDFs contain searchable text, not just scanned images.")
         st.stop()
-    
-    st.info(f"📚 Processing {len(extractable_pdfs)} PDF files: {', '.join(extractable_pdfs)}")
 
     for fn in extractable_pdfs:
         path = os.path.join(data_dir, fn)
@@ -149,8 +147,6 @@ def build_vectorstore():
     if not chunks:
         st.error("No text chunks could be generated from the PDF content.")
         st.stop()
-
-    st.success(f"✅ Created {len(chunks)} text chunks from {len(extractable_pdfs)} PDF files")
 
     embeddings = OpenAIEmbeddings(openai_api_key=api_key)
     try:
