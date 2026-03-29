@@ -34,3 +34,4 @@ Thumbs.db
 # Editors
 .vscode/settings.json
 *.swp
+backend/bm25_index/
