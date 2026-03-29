@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# Backend runtime artifacts
+backend/document_registry.db
+backend/faiss_index/
+backend/data/*.pdf
+# Keep the .gitkeep so the data/ dir is tracked
+!backend/data/.gitkeep
+
+# Environment / secrets
+.env
+.env.local
+*.env
+
+# Next.js
+frontend/.next/
+frontend/out/
+frontend/node_modules/
+frontend/.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/settings.json
+*.swp
+backend/bm25_index/
