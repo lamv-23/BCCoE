@@ -1,34 +1,38 @@
 """
-RAG pipeline: vectorstore management and retrieval logic.
+RAG pipeline using BM25 retrieval — fully local, no embedding API needed.
 
-The FAISS index is persisted to disk so it survives restarts. A module-level
-asyncio.Lock ensures only one rebuild runs at a time even under concurrent
-requests.  After a document update, call invalidate_and_rebuild() to
-atomically swap in a fresh index.
+The BM25 index is persisted to disk so it survives restarts. A module-level
+asyncio.Lock ensures only one rebuild runs at a time under concurrent requests.
+Call invalidate_and_rebuild() after a document update to atomically swap in
+a fresh index.
 """
 
 import asyncio
+import json
 import logging
 import os
+import pickle
 import re
 from datetime import datetime
 from typing import Optional
 
 import pdfplumber
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import FAISS
-from langchain_openai import OpenAIEmbeddings
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from rank_bm25 import BM25Okapi
 
 logger = logging.getLogger(__name__)
 
 DATA_DIR = os.environ.get("DATA_DIR", os.path.join(os.path.dirname(__file__), "data"))
-FAISS_DIR = os.environ.get("FAISS_DIR", os.path.join(os.path.dirname(__file__), "faiss_index"))
+INDEX_DIR = os.environ.get("INDEX_DIR", os.path.join(os.path.dirname(__file__), "bm25_index"))
+INDEX_FILE = os.path.join(INDEX_DIR, "bm25.pkl")
+CHUNKS_FILE = os.path.join(INDEX_DIR, "chunks.json")
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Module-level shared state
 # ──────────────────────────────────────────────────────────────────────────────
 
-_vectorstore: Optional[FAISS] = None
+_bm25: Optional[BM25Okapi] = None
+_chunks: list[str] = []
 _index_lock = asyncio.Lock()
 _last_built: Optional[datetime] = None
 _chunk_count: int = 0
@@ -65,18 +69,18 @@ If a CBA answer cannot be found in the provided documents, respond with: "I coul
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-async def get_vectorstore() -> FAISS:
-    """Return the cached vectorstore, building it first if needed."""
-    global _vectorstore
-    if _vectorstore is None:
+async def get_index() -> tuple[BM25Okapi, list[str]]:
+    """Return the cached BM25 index and chunks, building if needed."""
+    global _bm25, _chunks
+    if _bm25 is None:
         await _build_and_cache(force_rebuild=False)
-    return _vectorstore
+    return _bm25, _chunks
 
 
 async def invalidate_and_rebuild() -> int:
     """Force a full rebuild of the index. Returns new chunk count."""
     count = await _build_and_cache(force_rebuild=True)
-    logger.info("Index rebuilt: %d chunks", count)
+    logger.info("BM25 index rebuilt: %d chunks", count)
     return count
 
 
@@ -94,55 +98,59 @@ def get_last_built() -> Optional[datetime]:
 
 
 async def _build_and_cache(force_rebuild: bool) -> int:
-    global _vectorstore, _last_built, _chunk_count
+    global _bm25, _chunks, _last_built, _chunk_count
 
     async with _index_lock:
-        # Try loading from disk first (unless forcing rebuild)
-        if not force_rebuild and _faiss_index_exists():
+        if not force_rebuild and os.path.exists(INDEX_FILE) and os.path.exists(CHUNKS_FILE):
             try:
-                embeddings = _make_embeddings()
-                vs = await asyncio.to_thread(
-                    FAISS.load_local, FAISS_DIR, embeddings, allow_dangerous_deserialization=True
-                )
-                _vectorstore = vs
+                bm25, chunks = await asyncio.to_thread(_load_index)
+                _bm25 = bm25
+                _chunks = chunks
+                _chunk_count = len(chunks)
                 _last_built = datetime.utcnow()
-                # We don't know exact chunk count from disk load, set a sentinel
-                _chunk_count = -1
-                logger.info("Loaded FAISS index from disk (%s)", FAISS_DIR)
+                logger.info("Loaded BM25 index from disk: %d chunks", _chunk_count)
                 return _chunk_count
             except Exception as e:
-                logger.warning("Failed to load FAISS from disk, rebuilding: %s", e)
+                logger.warning("Failed to load index from disk, rebuilding: %s", e)
 
-        # Build from PDFs
         chunks = await asyncio.to_thread(_extract_all_chunks)
         if not chunks:
             raise RuntimeError("No text chunks extracted from PDFs — cannot build index")
 
-        embeddings = _make_embeddings()
-        vs = await asyncio.to_thread(FAISS.from_texts, chunks, embeddings)
+        bm25 = await asyncio.to_thread(_build_bm25, chunks)
 
-        # Persist to disk
-        os.makedirs(FAISS_DIR, exist_ok=True)
-        await asyncio.to_thread(vs.save_local, FAISS_DIR)
+        os.makedirs(INDEX_DIR, exist_ok=True)
+        await asyncio.to_thread(_save_index, bm25, chunks)
 
-        _vectorstore = vs
+        _bm25 = bm25
+        _chunks = chunks
         _chunk_count = len(chunks)
         _last_built = datetime.utcnow()
-        logger.info("Built and saved FAISS index: %d chunks", _chunk_count)
+        logger.info("Built and saved BM25 index: %d chunks", _chunk_count)
         return _chunk_count
 
 
-def _faiss_index_exists() -> bool:
-    return os.path.exists(os.path.join(FAISS_DIR, "index.faiss"))
+def _build_bm25(chunks: list[str]) -> BM25Okapi:
+    tokenized = [_tokenize(c) for c in chunks]
+    return BM25Okapi(tokenized)
 
 
-def _make_embeddings() -> OpenAIEmbeddings:
-    api_key = os.environ.get("OPENAI_API_KEY")
-    return OpenAIEmbeddings(openai_api_key=api_key)
+def _save_index(bm25: BM25Okapi, chunks: list[str]) -> None:
+    with open(INDEX_FILE, "wb") as f:
+        pickle.dump(bm25, f)
+    with open(CHUNKS_FILE, "w", encoding="utf-8") as f:
+        json.dump(chunks, f, ensure_ascii=False)
+
+
+def _load_index() -> tuple[BM25Okapi, list[str]]:
+    with open(INDEX_FILE, "rb") as f:
+        bm25 = pickle.load(f)
+    with open(CHUNKS_FILE, "r", encoding="utf-8") as f:
+        chunks = json.load(f)
+    return bm25, chunks
 
 
 def _extract_all_chunks() -> list[str]:
-    """Scan data/ for PDFs, extract text, split into chunks."""
     os.makedirs(DATA_DIR, exist_ok=True)
     pdf_files = [f for f in os.listdir(DATA_DIR) if f.lower().endswith(".pdf")]
 
@@ -212,35 +220,51 @@ def _clean_text(text: str) -> str:
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-def get_relevant_context(vectorstore: FAISS, query: str, max_chunks: int = 20) -> list:
-    """3-strategy hybrid retrieval with deduplication."""
-    all_docs = []
+def get_relevant_context(
+    bm25: BM25Okapi,
+    chunks: list[str],
+    query: str,
+    max_chunks: int = 20,
+) -> list[str]:
+    """
+    BM25 retrieval with multi-query expansion.
+    Returns up to max_chunks deduplicated text chunks.
+    """
+    all_indices: list[int] = []
 
-    # Strategy 1: direct similarity
-    primary = vectorstore.similarity_search(query, k=12)
-    all_docs.extend(primary)
+    # Primary query
+    all_indices.extend(_bm25_top_k(bm25, query, k=12))
 
-    # Strategy 2: expanded query if sparse results
-    if len(primary) < 8:
-        expanded = expand_query(query)
-        if expanded != query:
-            all_docs.extend(vectorstore.similarity_search(expanded, k=6))
+    # Expanded query
+    expanded = expand_query(query)
+    if expanded != query:
+        all_indices.extend(_bm25_top_k(bm25, expanded, k=6))
 
-    # Strategy 3: key term search
-    if len(all_docs) < 10:
-        for term in _key_terms(query)[:2]:
-            all_docs.extend(vectorstore.similarity_search(term, k=4))
+    # Key term queries
+    for term in _key_terms(query)[:2]:
+        all_indices.extend(_bm25_top_k(bm25, term, k=4))
 
-    # Deduplicate
+    # Deduplicate preserving order
     seen: set[int] = set()
-    unique: list = []
-    for doc in all_docs:
-        h = hash(doc.page_content)
-        if h not in seen and len(unique) < max_chunks:
-            seen.add(h)
-            unique.append(doc)
+    result: list[str] = []
+    for idx in all_indices:
+        if idx not in seen and len(result) < max_chunks:
+            seen.add(idx)
+            result.append(chunks[idx])
 
-    return unique[:max_chunks]
+    return result[:max_chunks]
+
+
+def _bm25_top_k(bm25: BM25Okapi, query: str, k: int) -> list[int]:
+    tokens = _tokenize(query)
+    scores = bm25.get_scores(tokens)
+    top_k = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:k]
+    # Only return indices with a positive score
+    return [i for i in top_k if scores[i] > 0]
+
+
+def _tokenize(text: str) -> list[str]:
+    return re.findall(r"\b[a-z]{2,}\b", text.lower())
 
 
 def expand_query(query: str) -> str:
@@ -248,12 +272,12 @@ def expand_query(query: str) -> str:
         "cost": ["expense", "expenditure", "financial"],
         "benefit": ["advantage", "gain", "value"],
         "analysis": ["assessment", "evaluation", "review"],
-        "discount": ["present value", "NPV", "discounting"],
+        "discount": ["present value", "npv", "discounting"],
         "risk": ["uncertainty", "sensitivity", "probability"],
         "social": ["societal", "community", "public"],
         "economic": ["financial", "monetary", "fiscal"],
     }
-    extras = []
+    extras: list[str] = []
     for word in query.lower().split():
         if word in synonyms:
             extras.extend(synonyms[word][:2])

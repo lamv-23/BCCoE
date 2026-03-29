@@ -11,7 +11,7 @@ export default function HomePage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [streamingContent, setStreamingContent] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
-  const [model, setModel] = useState("gpt-4o-mini");
+  const [model, setModel] = useState("claude-sonnet-4-6");
   const [maxChunks, setMaxChunks] = useState(18);
 
   const sendMessage = async (content: string) => {

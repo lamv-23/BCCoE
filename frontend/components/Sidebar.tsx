@@ -13,9 +13,9 @@ interface Props {
 }
 
 const MODELS = [
-  { label: "GPT-4o Mini (Recommended)", value: "gpt-4o-mini" },
-  { label: "GPT-4o", value: "gpt-4o" },
-  { label: "GPT-4", value: "gpt-4" },
+  { label: "Claude Sonnet 4.6 (Recommended)", value: "claude-sonnet-4-6" },
+  { label: "Claude Opus 4.6", value: "claude-opus-4-6" },
+  { label: "Claude Haiku 4.5", value: "claude-haiku-4-5-20251001" },
 ];
 
 function formatDate(iso: string | null): string {

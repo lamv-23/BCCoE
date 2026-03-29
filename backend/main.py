@@ -18,6 +18,9 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
+from dotenv import load_dotenv
+
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 from datetime import datetime, timedelta
 from typing import AsyncGenerator
 
@@ -26,9 +29,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from langchain.chains import LLMChain
-from langchain.prompts import PromptTemplate
-from langchain_openai import ChatOpenAI
+import anthropic
 from pydantic import BaseModel
 
 import document_registry as registry
@@ -39,7 +40,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 logger = logging.getLogger(__name__)
 
 DATA_DIR = os.environ.get("DATA_DIR", os.path.join(os.path.dirname(__file__), "data"))
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Global state shared across requests
@@ -64,17 +65,17 @@ async def lifespan(app: FastAPI):
 
     logger.info("=== BCCoE CBA Assistant starting up ===")
 
-    if not OPENAI_API_KEY:
-        logger.warning("OPENAI_API_KEY not set — LLM calls will fail")
+    if not ANTHROPIC_API_KEY:
+        logger.warning("ANTHROPIC_API_KEY not set — LLM calls will fail")
 
     # Initialise document registry
     registry.init_db(DATA_DIR)
     logger.info("Document registry initialised")
 
-    # Build / load FAISS index
-    logger.info("Building vector index…")
-    await rag.get_vectorstore()
-    logger.info("Vector index ready")
+    # Build / load BM25 index
+    logger.info("Building BM25 index from PDFs…")
+    await rag.get_index()
+    logger.info("BM25 index ready")
 
     # Set up document updater
     _updater = DocumentUpdater(data_dir=DATA_DIR)
@@ -140,7 +141,7 @@ class Message(BaseModel):
 
 class ChatRequest(BaseModel):
     messages: list[Message]
-    model: str = "gpt-4o-mini"
+    model: str = "claude-sonnet-4-6"
     max_chunks: int = 18
 
 
@@ -290,21 +291,21 @@ async def _stream_chat(request: ChatRequest) -> AsyncGenerator[str, None]:
         return
 
     try:
-        vectorstore = await rag.get_vectorstore()
+        bm25, chunks = await rag.get_index()
     except Exception as e:
-        logger.error("Failed to get vectorstore: %s", e)
-        yield _sse("error", "Vector index not available. Please try again shortly.")
+        logger.error("Failed to get BM25 index: %s", e)
+        yield _sse("error", "Search index not available. Please try again shortly.")
         return
 
     # Retrieve context
-    docs = rag.get_relevant_context(vectorstore, user_message, max_chunks=request.max_chunks)
+    docs = rag.get_relevant_context(bm25, chunks, user_message, max_chunks=request.max_chunks)
     if not docs:
         yield _sse("token", "I couldn't find relevant information in the CBA guides for your question. Could you try rephrasing it?")
         yield _sse("done", "")
         return
 
     context = "\n\n".join(
-        f"--- Context Chunk {i} ---\n{doc.page_content}"
+        f"--- Context Chunk {i} ---\n{doc}"
         for i, doc in enumerate(docs, 1)
     )
 
@@ -317,42 +318,31 @@ async def _stream_chat(request: ChatRequest) -> AsyncGenerator[str, None]:
         else:
             chat_history += f"Assistant: {msg.content[:200]}…\n"
 
-    # Build prompt
-    prompt_template = PromptTemplate(
-        input_variables=["context", "question", "chat_history"],
-        template=f"""{rag.SYSTEM_PROMPT}
-
-PREVIOUS CONVERSATION:
-{{chat_history}}
-
-RELEVANT CONTEXT FROM CBA GUIDES:
-{{context}}
-
-CURRENT QUESTION:
-{{question}}
-
-RESPONSE:""",
+    # Build messages for Anthropic Claude API
+    system_content = (
+        f"{rag.SYSTEM_PROMPT}\n\n"
+        f"RELEVANT CONTEXT FROM CBA GUIDES:\n{context}"
     )
+    claude_messages = []
+    if chat_history:
+        claude_messages.append({"role": "user", "content": f"[Previous conversation]\n{chat_history}"})
+        claude_messages.append({"role": "assistant", "content": "Understood, I have noted the previous conversation."})
+    claude_messages.append({"role": "user", "content": user_message})
 
-    llm = ChatOpenAI(
-        model_name=request.model,
-        temperature=0.1,
-        max_tokens=2000,
-        openai_api_key=OPENAI_API_KEY,
-        streaming=True,
-    )
+    client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
 
     # Stream tokens
     try:
-        formatted_prompt = prompt_template.format(
-            context=context,
-            question=user_message,
-            chat_history=chat_history,
-        )
-        async for chunk in llm.astream(formatted_prompt):
-            token = chunk.content
-            if token:
-                yield _sse("token", token)
+        async with client.messages.stream(
+            model=request.model,
+            system=system_content,
+            messages=claude_messages,
+            temperature=1,
+            max_tokens=2000,
+        ) as stream:
+            async for text in stream.text_stream:
+                if text:
+                    yield _sse("token", text)
     except Exception as e:
         logger.error("LLM streaming error: %s", e)
         yield _sse("error", f"Error generating response: {str(e)}")
